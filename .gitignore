@@ -1,0 +1,31 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/emcomm-objects
+/emcomm-objects.exe
+/dist/
+/build/
+
+# Go
+*.test
+*.out
+*.prof
+vendor/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local config and runtime state
+config.yaml
+config.local.yaml
+objects.json
+*.db
+*.db-shm
+*.db-wal
+*.log
