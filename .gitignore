@@ -21,6 +21,9 @@ vendor/
 *.swp
 *~
 
+# Claude Code / preview-tool local config (user-specific paths)
+.claude/
+
 # Local config and runtime state
 config.yaml
 config.local.yaml
