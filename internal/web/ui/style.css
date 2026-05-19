@@ -254,11 +254,12 @@ input:focus, select:focus { outline: 2px solid #2e7d32; outline-offset: -1px; }
 .import-name-wrap { display: flex; flex-direction: column; gap: 1px; }
 .import-name-input {
   font-family: ui-monospace, monospace;
-  font-size: 12px;
-  /* Show all 9 chars: 9ch for content + padding + a tiny safety margin so
-     proportional-ish browser glyphs don't clip the last char. */
-  width: 10ch;
-  padding: 2px 4px;
+  font-size: 13px;
+  /* Show all 9 chars comfortably. `ch` measures the "0" glyph but uppercase
+     letters and digits are typically wider, so we over-budget. content-box
+     keeps padding outside the width. */
+  width: 13ch;
+  padding: 2px 6px;
   box-sizing: content-box;
 }
 .import-name-original {
