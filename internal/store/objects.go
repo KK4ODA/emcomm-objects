@@ -374,10 +374,39 @@ func (s *Store) DecrementKillBeacon(name string, t time.Time) bool {
 	return false
 }
 
+// Resurrect transitions a killed object back to live, clearing all kill
+// state and ExpiresAt (so a now-past expiry doesn't immediately re-kill it),
+// and zeroing LastBeacon so the next scheduler tick fires a live beacon
+// right away. Returns ErrNotKilled if the object is already live —
+// reviving a live object is a no-op error to prevent accidental clicks
+// resetting an in-flight live object's LastBeacon.
+//
+// Operator must re-set ExpiresAt afterward if they want the revived object
+// to auto-expire again.
+func (s *Store) Resurrect(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, ex := range s.objects {
+		if ex.ObjectName == name {
+			if !ex.IsKilled() {
+				return ErrNotKilled
+			}
+			s.objects[i].Status = StatusLive
+			s.objects[i].KillBeaconsLeft = 0
+			s.objects[i].KilledAt = LooseTime{}
+			s.objects[i].ExpiresAt = LooseTime{}
+			s.objects[i].LastBeacon = LooseTime{} // fire fresh live beacon next tick
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 // Standard errors for kill operations. Callers compare with errors.Is.
 var (
 	ErrNotFound      = errors.New("object not found")
 	ErrAlreadyKilled = errors.New("object already killed")
+	ErrNotKilled     = errors.New("object is not killed; nothing to revive")
 	ErrNeverBeaconed = errors.New("object was never live-beaconed; refusing to send kill (would create a ghost)")
 	ErrNoKillBeacons = errors.New("object has no remaining kill beacons")
 )

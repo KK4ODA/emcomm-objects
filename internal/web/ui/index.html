@@ -26,6 +26,7 @@
     <div class="tabs">
       <button class="tab active" data-tab="objects">Objects</button>
       <button class="tab" data-tab="add">Add / Edit</button>
+      <button class="tab" data-tab="import">Import CSV</button>
       <button class="tab" data-tab="log">Activity</button>
     </div>
 
@@ -71,17 +72,23 @@
           </label>
           <button type="button" id="f-pick-btn" title="Click on the map to set lat/lon">Pick on map</button>
         </div>
+        <div class="row sym-row">
+          <label>Symbol
+            <div id="f-sym-display" class="sym-display" title="Click to pick from chart">
+              <span id="f-sym-preview" class="sym-sprite"></span>
+              <code id="f-sym-code">/r</code>
+              <button type="button" id="f-sym-pick">Pick…</button>
+            </div>
+            <input type="hidden" id="f-table" value="/">
+            <input type="hidden" id="f-sym" value="r">
+          </label>
+          <span class="hint">Click <strong>Pick</strong> to choose from the visual chart, or type a code below to override.</span>
+        </div>
         <div class="row">
-          <label>Symbol table
-            <select id="f-table">
-              <option value="/" selected>/ (primary)</option>
-              <option value="\">\ (alternate)</option>
-            </select>
+          <label>Symbol code (advanced)
+            <input type="text" id="f-sym-manual" maxlength="2" placeholder="/r" style="font-family: ui-monospace, monospace; width: 5em;">
           </label>
-          <label>Symbol code
-            <input type="text" id="f-sym" maxlength="1" value="r" required>
-          </label>
-          <span class="hint">e.g. <code>/r</code> = red dot, <code>/&gt;</code> = car, <code>\R</code> = restaurant</span>
+          <span class="hint">2 chars: table (<code>/</code> or <code>\</code>) + symbol char.</span>
         </div>
         <label>Comment
           <input type="text" id="f-comment" maxlength="64">
@@ -118,11 +125,68 @@
       </form>
     </div>
 
+    <div class="tab-panel" data-tab-panel="import">
+      <div id="import-intro">
+        <p>Import APRS objects from a CSV file. Expected columns (header row required):</p>
+        <pre><code>ObjectName,Latitude,Longitude,SymbolTable,SymbolID,Comment,IntervalMinutes</code></pre>
+        <p class="hint"><code>SymbolTable</code>, <code>SymbolID</code>, <code>Comment</code>, and <code>IntervalMinutes</code> are optional (defaults: <code>/</code>, <code>r</code>, blank, <code>30</code>). Imported objects start <strong>disabled</strong> so nothing auto-beacons; enable each one explicitly after review.
+          <a href="#" id="import-template-link">Download template</a></p>
+      </div>
+      <div class="row">
+        <label>Upload CSV file
+          <input type="file" id="import-file" accept=".csv,text/csv">
+        </label>
+        <span class="hint">or paste below ↓</span>
+      </div>
+      <label>Paste CSV
+        <textarea id="import-text" rows="6" placeholder="ObjectName,Latitude,Longitude,SymbolTable,SymbolID,Comment,IntervalMinutes&#10;DCFR_3,33.79,-84.32,/,r,DCFR Station 3,30"></textarea>
+      </label>
+      <div class="form-actions">
+        <button type="button" id="import-parse">Parse / Preview</button>
+        <button type="button" id="import-commit" class="primary" disabled>Import selected rows</button>
+        <button type="button" id="import-cancel" class="secondary">Clear</button>
+      </div>
+      <p id="import-error" class="error" hidden></p>
+      <div id="import-preview-wrap" hidden>
+        <p class="hint" id="import-summary"></p>
+        <table id="import-preview">
+          <thead><tr>
+            <th><input type="checkbox" id="import-select-all" checked></th>
+            <th>Name</th>
+            <th>Lat</th>
+            <th>Lon</th>
+            <th>Sym</th>
+            <th>Interval</th>
+            <th>Comment</th>
+            <th>Status</th>
+            <th>If exists</th>
+          </tr></thead>
+          <tbody id="import-preview-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="tab-panel" data-tab-panel="log">
       <ol id="log-list"></ol>
     </div>
   </section>
 </main>
+
+<div id="sym-modal" class="modal" hidden>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>Pick APRS symbol</h2>
+      <button type="button" class="modal-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">Click a symbol to select it. Hover for the code and name. Hessu Enarvi's symbol set, CC0.</p>
+      <h3>Primary table (<code>/</code>)</h3>
+      <div id="sym-grid-primary" class="sym-grid"></div>
+      <h3>Alternate table (<code>\</code>)</h3>
+      <div id="sym-grid-alternate" class="sym-grid"></div>
+    </div>
+  </div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
   integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>

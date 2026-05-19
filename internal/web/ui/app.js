@@ -10,6 +10,7 @@ const API = {
   remove:  (name) => fetch(`/api/objects/${encodeURIComponent(name)}`, {method: 'DELETE'}).then(noContent),
   beacon:  (name) => fetch(`/api/objects/${encodeURIComponent(name)}/beacon`, {method: 'POST'}).then(jsonOrThrow),
   kill:    (name) => fetch(`/api/objects/${encodeURIComponent(name)}/kill`, {method: 'POST'}).then(jsonOrThrow),
+  revive:  (name) => fetch(`/api/objects/${encodeURIComponent(name)}/revive`, {method: 'POST'}).then(jsonOrThrow),
   status:  () => fetch('/api/status').then(jsonOrThrow),
   config:  () => fetch('/api/config').then(jsonOrThrow),
 };
@@ -190,28 +191,37 @@ function statusBadge(o) {
 }
 
 // actionButtons returns the per-row action buttons. Killed objects show
-// "Delete" only (you can't beacon/edit a dead object; delete just removes
-// it from the local file — does NOT un-kill on the network).
+// Revive (put back on the air) + Delete (remove from local store — does
+// NOT un-kill on the network).
 function actionButtons(o, killed) {
   if (killed) {
     return el('span', {},
+      twoStepButton('Revive', 'primary', () => reviveNow(o.ObjectName)),
       el('button', {class: 'secondary', onclick: () => deleteRow(o.ObjectName)}, 'Delete'),
     );
   }
   return el('span', {},
     el('button', {onclick: () => beaconNow(o.ObjectName)}, 'Beacon'),
     el('button', {class: 'secondary', onclick: () => loadIntoForm(o)}, 'Edit'),
-    twoStepKillButton(o.ObjectName),
+    twoStepButton('Kill', 'danger', () => killNow(o.ObjectName)),
   );
 }
 
-// twoStepKillButton: first click reveals "Click again to confirm" for 5s.
-// Idle reset prevents an accidental click much later from killing the object.
-function twoStepKillButton(name) {
-  const btn = el('button', {class: 'danger'}, 'Kill');
+// twoStepButton: first click reveals "Click to confirm" for 5s with pulse
+// animation; second click runs onConfirm. Used for any state-changing action
+// where an accidental single click would be costly.
+//
+// `variant`: 'danger' (red) or 'primary' (green). Both pulse when armed.
+function twoStepButton(label, variant, onConfirm) {
+  const btn = el('button', {class: variant}, label);
   let armed = false;
   let timer = null;
-  const disarm = () => { armed = false; btn.textContent = 'Kill'; btn.classList.remove('armed'); if (timer) { clearTimeout(timer); timer = null; } };
+  const disarm = () => {
+    armed = false;
+    btn.textContent = label;
+    btn.classList.remove('armed');
+    if (timer) { clearTimeout(timer); timer = null; }
+  };
   btn.addEventListener('click', async () => {
     if (!armed) {
       armed = true;
@@ -221,7 +231,7 @@ function twoStepKillButton(name) {
       return;
     }
     disarm();
-    await killNow(name);
+    await onConfirm();
   });
   return btn;
 }
@@ -237,6 +247,16 @@ async function killNow(name) {
     await reload();
   } catch (e) {
     logLine('error', `kill ${name}: ${e.message}`);
+  }
+}
+
+async function reviveNow(name) {
+  try {
+    await API.revive(name);
+    logLine('info', `${name}: revived — live beacon on next tick (within ~10s)`);
+    await reload();
+  } catch (e) {
+    logLine('error', `revive ${name}: ${e.message}`);
   }
 }
 
@@ -307,6 +327,7 @@ function clearForm() {
   $('#f-lon').value = '';
   $('#f-table').value = '/';
   $('#f-sym').value = 'r';
+  updateSymPreview();
   $('#f-comment').value = '';
   setPath('');
   $('#f-expires').value = '';
@@ -325,6 +346,7 @@ function loadIntoForm(o) {
   $('#f-lon').value = o.Longitude;
   $('#f-table').value = o.SymbolTable;
   $('#f-sym').value = o.SymbolID;
+  updateSymPreview();
   $('#f-comment').value = o.Comment || '';
   setPath(o.Path || '');
   $('#f-expires').value = expiresAtToInput(o.ExpiresAt);
@@ -431,6 +453,414 @@ async function beaconNow(name) {
   }
 }
 
+// ---------- Symbol picker ----------
+
+// Names for the most common APRS symbols (APRS Protocol Reference v1.0.1 ch.5).
+// Sprite cell at index n maps to symbol code String.fromCharCode(33+n);
+// 96 cells per table arranged 16-wide. Unnamed cells display the code only.
+const SYM_NAMES_PRIMARY = {
+  '!':'Police/Sheriff','"':'reserved','#':'Digi','$':'Phone','%':'DX cluster',
+  '&':'HF Gateway',"'":'Small aircraft','(':'Mobile satellite','(':'Mobile satellite',
+  ')':'Wheelchair','*':'Snowmobile','+':'Red Cross',',':'Boy Scouts','-':'House (VHF)',
+  '.':'X','/':'Red dot',':':'Fire','`':'Dish antenna',
+  '0':'Number 0',';':'Park / picnic area','<':'Motorcycle','=':'Railroad engine',
+  '>':'Car','?':'File server','@':'HC FUTURE predict','A':'Aid station','B':'BBS',
+  'C':'Canoe','E':'Eyeball','F':'Tractor','G':'Grid Square','H':'Hotel','I':'TCP/IP',
+  'K':'School','L':'PC user','M':'MacAPRS','N':'NTS station','O':'Balloon','P':'Police',
+  'R':'REC vehicle','S':'Shuttle','T':'SSTV','U':'Bus','V':'ATV','W':'Weather station',
+  'X':'Helicopter','Y':'Yacht (sail)','Z':'WinAPRS','[':'Jogger','\\':'Triangle',
+  ']':'PBBS','^':'Large aircraft','_':'Weather site','a':'Ambulance','b':'Bike',
+  'c':'Incident Cmd Post','d':'Fire station','e':'Horse','f':'Fire truck','g':'Glider',
+  'h':'Hospital','i':'IOTA','j':'Jeep','k':'Truck','l':'Laptop','m':'Mic-E repeater',
+  'n':'Node','o':'Emerg Op Center','p':'Rover (dog)','q':'Grid square shown','r':'Antenna',
+  's':'Power boat','t':'Truck stop','u':'18-wheeler','v':'Van','w':'Water station',
+  'x':'xAPRS','y':'Yagi','z':'Shelter','{':'reserved','|':'TNC stream',
+  '}':'reserved','~':'TNC stream',
+};
+const SYM_NAMES_ALTERNATE = {
+  '!':'Emergency','"':'reserved','#':'Digi (green star)','$':'Bank or ATM','%':'reserved',
+  '&':'Crossing','(':'Cloudy',')':'Firenet MEO','*':'Snow','+':'Church',',':'Girl Scouts',
+  '-':'House (HF)','.':'Ambiguous','/':'Waypoint','0':'Circle','3':'Triangle',
+  ':':'Hail',';':'Park / picnic','<':'Advisory','>':'Car (alt)','?':'Info Kiosk',
+  '@':'Hurricane','A':'Avalanche','B':'reserved','C':'Coast Guard','D':'Drizzle',
+  'E':'Smoke','F':'Freezing rain','G':'Snow shower','H':'Haze','I':'Rain shower',
+  'J':'Lightning','K':'Kenwood HT','L':'Lighthouse','M':'Military','N':'Nav buoy',
+  'O':'Rocket','P':'Parking','Q':'Quake','R':'Restaurant','S':'Satellite','T':'Thunderstorm',
+  'U':'Sunny','V':'VORTAC','W':'NWS site','X':'Pharmacy','Y':'reserved','Z':'reserved',
+  '[':'Wall cloud','^':'Aircraft (alt)','_':'Weather flag','`':'Rain','a':'ARRL',
+  'b':'Blowing dust','c':'Civil Defense','d':'DX spot','e':'Sleet','f':'Funnel cloud',
+  'g':'Gale','h':'Store','i':'Black diamond','j':'Work zone','k':'4WD','l':'Area locations',
+  'm':'Value sign','n':'Triangle (alt)','o':'Small circle','p':'Partly cloudy',
+  'r':'Restrooms','s':'Ship','t':'Tornado','u':'Truck (alt)','v':'Van (alt)','w':'Flooding',
+  'y':'Skywarn','z':'Shelter (alt)',
+};
+
+function symbolName(table, code) {
+  const m = table === '/' ? SYM_NAMES_PRIMARY : SYM_NAMES_ALTERNATE;
+  return m[code] || '';
+}
+
+// renderSymGrid populates a grid div with 96 sprite cells for one table.
+// onClick fires with (table, code).
+function renderSymGrid(div, table) {
+  div.replaceChildren();
+  const spriteUrl = table === '/' ? 'symbols/aprs-symbols-24-0.png' : 'symbols/aprs-symbols-24-1.png';
+  for (let n = 0; n < 96; n++) {
+    const code = String.fromCharCode(33 + n);
+    const row = Math.floor(n / 16);
+    const col = n % 16;
+    const name = symbolName(table, code);
+    const title = name ? `${table}${code} — ${name}` : `${table}${code}`;
+    const cell = el('button', {
+      type: 'button',
+      class: 'sym-cell',
+      title,
+      dataset: {table, code},
+    });
+    cell.style.backgroundImage = `url(${spriteUrl})`;
+    cell.style.backgroundPosition = `-${col * 24}px -${row * 24}px`;
+    cell.addEventListener('click', () => pickSymbol(table, code));
+    div.appendChild(cell);
+  }
+}
+
+// updateSymPreview re-paints the form's symbol preview from current hidden values.
+function updateSymPreview() {
+  const table = $('#f-table').value;
+  const code = $('#f-sym').value;
+  const preview = $('#f-sym-preview');
+  const codeEl = $('#f-sym-code');
+  const spriteUrl = table === '/' ? 'symbols/aprs-symbols-24-0.png' : 'symbols/aprs-symbols-24-1.png';
+  const n = code.charCodeAt(0) - 33;
+  if (n < 0 || n >= 96) {
+    preview.style.backgroundImage = '';
+    codeEl.textContent = `${table}${code}  (out of range)`;
+    return;
+  }
+  const row = Math.floor(n / 16);
+  const col = n % 16;
+  preview.style.backgroundImage = `url(${spriteUrl})`;
+  preview.style.backgroundPosition = `-${col * 24}px -${row * 24}px`;
+  const name = symbolName(table, code);
+  codeEl.textContent = name ? `${table}${code} — ${name}` : `${table}${code}`;
+  // Keep the advanced manual field in sync (for users who prefer to type).
+  $('#f-sym-manual').value = `${table}${code}`;
+}
+
+function pickSymbol(table, code) {
+  $('#f-table').value = table;
+  $('#f-sym').value = code;
+  updateSymPreview();
+  closeSymModal();
+}
+
+function openSymModal() {
+  $('#sym-modal').hidden = false;
+  document.body.style.overflow = 'hidden';
+  // Lazy-render the grids the first time.
+  if (!$('#sym-grid-primary').firstChild) {
+    renderSymGrid($('#sym-grid-primary'), '/');
+    renderSymGrid($('#sym-grid-alternate'), '\\');
+  }
+}
+function closeSymModal() {
+  $('#sym-modal').hidden = true;
+  document.body.style.overflow = '';
+}
+
+$('#f-sym-pick').addEventListener('click', openSymModal);
+$('#f-sym-display').addEventListener('click', (ev) => {
+  // Click the preview/code area also opens the modal (button still works on its own).
+  if (ev.target.id !== 'f-sym-pick') openSymModal();
+});
+$('#sym-modal .modal-close').addEventListener('click', closeSymModal);
+$('#sym-modal').addEventListener('click', (ev) => {
+  if (ev.target.id === 'sym-modal') closeSymModal(); // backdrop click
+});
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && !$('#sym-modal').hidden) closeSymModal();
+});
+
+// Manual override: if user types a 2-char code, parse and update.
+$('#f-sym-manual').addEventListener('input', () => {
+  const v = $('#f-sym-manual').value;
+  if (v.length === 2 && (v[0] === '/' || v[0] === '\\')) {
+    $('#f-table').value = v[0];
+    $('#f-sym').value = v[1];
+    updateSymPreview();
+  } else if (v.length === 1) {
+    // Just symbol code; keep current table.
+    $('#f-sym').value = v;
+    updateSymPreview();
+  }
+});
+
+// ---------- CSV import ----------
+
+// Headers we accept in any case, mapped to canonical Object field names.
+// Required: ObjectName + Latitude + Longitude. Others default.
+const CSV_HEADER_MAP = {
+  objectname: 'ObjectName', name: 'ObjectName',
+  latitude: 'Latitude', lat: 'Latitude',
+  longitude: 'Longitude', lon: 'Longitude', lng: 'Longitude',
+  symboltable: 'SymbolTable', table: 'SymbolTable',
+  symbolid: 'SymbolID', symbol: 'SymbolID', sym: 'SymbolID',
+  comment: 'Comment',
+  intervalminutes: 'IntervalMinutes', interval: 'IntervalMinutes',
+};
+
+// parseCSV handles quoted fields, commas-in-quotes, CR/LF/CRLF line endings.
+// Returns {headers, rows} or throws Error with line/col on malformed input.
+function parseCSV(text) {
+  const out = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (i + 1 < n && text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === ',') { row.push(field); field = ''; i++; continue; }
+    if (c === '\r') { i++; continue; } // ignore; handled at \n or alone
+    if (c === '\n') { row.push(field); out.push(row); row = []; field = ''; i++; continue; }
+    field += c; i++;
+  }
+  // Last field/row (no trailing newline).
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    out.push(row);
+  }
+  // Drop empty trailing rows (e.g. trailing blank line).
+  while (out.length > 0 && out[out.length - 1].length === 1 && out[out.length - 1][0] === '') {
+    out.pop();
+  }
+  if (out.length === 0) throw new Error('empty CSV');
+  const headers = out[0].map((h) => h.trim());
+  const rows = out.slice(1);
+  return { headers, rows };
+}
+
+// validateImportRow returns { ok, object, errors[] } for one parsed CSV row.
+// existingNames is a Set of names already in the store (for collision detection).
+function validateImportRow(headers, raw, existingNames) {
+  const obj = {
+    ShowTooltip: true,
+    SymbolTable: '/',
+    SymbolID: 'r',
+    Comment: '',
+    IntervalMinutes: 30,
+    Enabled: false, // import default: do not auto-beacon
+    Path: '',
+    LastBeacon: '0001-01-01T00:00:00',
+  };
+  const errs = [];
+  for (let i = 0; i < headers.length; i++) {
+    const key = CSV_HEADER_MAP[headers[i].toLowerCase()];
+    if (!key) continue; // ignore unknown columns
+    const v = (raw[i] || '').trim();
+    if (v === '') continue;
+    if (key === 'Latitude' || key === 'Longitude') {
+      const f = parseFloat(v);
+      if (isNaN(f)) { errs.push(`${key} not a number: "${v}"`); continue; }
+      obj[key] = f;
+    } else if (key === 'IntervalMinutes') {
+      const n = parseInt(v, 10);
+      if (isNaN(n) || n < 0) { errs.push(`IntervalMinutes invalid: "${v}"`); continue; }
+      obj[key] = n;
+    } else {
+      obj[key] = v;
+    }
+  }
+  // Validate required fields.
+  if (!obj.ObjectName) errs.push('missing ObjectName');
+  if (obj.ObjectName && obj.ObjectName.length > 9) errs.push('ObjectName > 9 chars');
+  if (typeof obj.Latitude !== 'number') errs.push('missing Latitude');
+  if (typeof obj.Longitude !== 'number') errs.push('missing Longitude');
+  if (typeof obj.Latitude === 'number' && (obj.Latitude < -90 || obj.Latitude > 90)) errs.push('Latitude out of range');
+  if (typeof obj.Longitude === 'number' && (obj.Longitude < -180 || obj.Longitude > 180)) errs.push('Longitude out of range');
+  if (obj.SymbolTable.length !== 1) errs.push(`SymbolTable must be 1 char (got "${obj.SymbolTable}")`);
+  if (obj.SymbolID.length !== 1) errs.push(`SymbolID must be 1 char (got "${obj.SymbolID}")`);
+  return {
+    ok: errs.length === 0,
+    object: obj,
+    errors: errs,
+    collides: existingNames.has(obj.ObjectName),
+  };
+}
+
+let importPreview = []; // [{object, ok, errors, collides, action, selected}]
+
+function renderImportPreview() {
+  const tbody = $('#import-preview-tbody');
+  tbody.replaceChildren();
+  let okCount = 0, errCount = 0, collisionCount = 0;
+  importPreview.forEach((row, idx) => {
+    if (row.ok) okCount++; else errCount++;
+    if (row.collides) collisionCount++;
+    const o = row.object;
+    const selBox = el('input', {type: 'checkbox', dataset: {idx: String(idx)}});
+    selBox.checked = row.selected;
+    selBox.disabled = !row.ok;
+    selBox.addEventListener('change', () => {
+      importPreview[idx].selected = selBox.checked;
+      updateCommitButton();
+    });
+    let actionCell;
+    if (!row.ok) {
+      actionCell = el('span', {class: 'muted'}, '—');
+    } else if (row.collides) {
+      const sel = el('select',
+        {dataset: {idx: String(idx)}},
+        el('option', {value: 'skip'}, 'Skip'),
+        el('option', {value: 'overwrite'}, 'Overwrite'),
+        el('option', {value: 'rename'}, 'Rename (suffix _2)'),
+      );
+      sel.value = row.action || 'skip';
+      sel.addEventListener('change', () => { importPreview[idx].action = sel.value; });
+      row.action = sel.value;
+      actionCell = sel;
+    } else {
+      actionCell = el('span', {class: 'muted'}, 'create');
+    }
+    const statusCell = row.ok
+      ? (row.collides
+          ? el('span', {class: 'badge badge-warn'}, 'collision')
+          : el('span', {class: 'badge badge-live'}, 'ready'))
+      : el('span', {class: 'badge badge-killing', title: row.errors.join('; ')}, 'invalid');
+    tbody.appendChild(el('tr', {class: row.ok ? '' : 'obj-disabled'},
+      el('td', {}, selBox),
+      el('td', {}, o.ObjectName || '(missing)'),
+      el('td', {}, typeof o.Latitude === 'number' ? o.Latitude.toFixed(5) : '—'),
+      el('td', {}, typeof o.Longitude === 'number' ? o.Longitude.toFixed(5) : '—'),
+      el('td', {class: 'symbol-cell'}, `${o.SymbolTable}${o.SymbolID}`),
+      el('td', {}, `${o.IntervalMinutes}m`),
+      el('td', {}, o.Comment || ''),
+      el('td', {}, statusCell),
+      el('td', {}, actionCell),
+    ));
+  });
+  $('#import-preview-wrap').hidden = false;
+  $('#import-summary').textContent =
+    `${importPreview.length} row(s) parsed · ${okCount} valid · ${errCount} invalid · ${collisionCount} collisions. Hover an "invalid" badge for the reason.`;
+  updateCommitButton();
+}
+
+function updateCommitButton() {
+  const n = importPreview.filter((r) => r.ok && r.selected).length;
+  const btn = $('#import-commit');
+  btn.disabled = n === 0;
+  btn.textContent = n === 0 ? 'Import selected rows' : `Import ${n} row(s)`;
+}
+
+async function doImportCommit() {
+  const existing = new Set(objects.map((o) => o.ObjectName));
+  let created = 0, overwritten = 0, renamed = 0, skipped = 0, failed = 0;
+  for (const row of importPreview) {
+    if (!row.ok || !row.selected) continue;
+    let target = row.object.ObjectName;
+    if (row.collides) {
+      if (row.action === 'skip') { skipped++; continue; }
+      if (row.action === 'rename') {
+        // Find an unused suffix _2, _3, ...
+        let suffix = 2;
+        let candidate;
+        do {
+          candidate = (target + '_' + suffix).slice(0, 9); // APRS limit
+          suffix++;
+        } while (existing.has(candidate) && suffix < 100);
+        existing.add(candidate);
+        target = candidate;
+      }
+    }
+    try {
+      const body = {...row.object, ObjectName: target};
+      await API.upsert(target, body);
+      if (row.collides && row.action === 'overwrite') overwritten++;
+      else if (row.collides && row.action === 'rename') renamed++;
+      else created++;
+    } catch (e) {
+      failed++;
+      logLine('error', `import ${target}: ${e.message}`);
+    }
+  }
+  logLine('info', `Import complete: ${created} created · ${renamed} renamed · ${overwritten} overwritten · ${skipped} skipped${failed ? ' · ' + failed + ' failed' : ''}`);
+  resetImport();
+  await reload();
+  showTab('objects');
+}
+
+function resetImport() {
+  importPreview = [];
+  $('#import-text').value = '';
+  $('#import-file').value = '';
+  $('#import-preview-wrap').hidden = true;
+  $('#import-error').hidden = true;
+  $('#import-commit').disabled = true;
+  $('#import-commit').textContent = 'Import selected rows';
+}
+
+$('#import-parse').addEventListener('click', async () => {
+  $('#import-error').hidden = true;
+  let text = $('#import-text').value.trim();
+  if (!text) {
+    const f = $('#import-file').files[0];
+    if (!f) {
+      $('#import-error').textContent = 'No CSV file or pasted text.';
+      $('#import-error').hidden = false;
+      return;
+    }
+    text = await f.text();
+  }
+  try {
+    const {headers, rows} = parseCSV(text);
+    const known = Object.keys(CSV_HEADER_MAP);
+    const lower = headers.map((h) => h.toLowerCase());
+    if (!lower.some((h) => CSV_HEADER_MAP[h] === 'ObjectName')) {
+      throw new Error(`CSV must have an "ObjectName" (or "Name") column. Got: ${headers.join(', ')}`);
+    }
+    const existingNames = new Set(objects.map((o) => o.ObjectName));
+    importPreview = rows.map((r) => {
+      const v = validateImportRow(headers, r, existingNames);
+      v.selected = v.ok;
+      v.action = v.collides ? 'skip' : null;
+      return v;
+    });
+    renderImportPreview();
+  } catch (e) {
+    $('#import-error').textContent = e.message;
+    $('#import-error').hidden = false;
+    $('#import-preview-wrap').hidden = true;
+  }
+});
+
+$('#import-commit').addEventListener('click', doImportCommit);
+$('#import-cancel').addEventListener('click', resetImport);
+$('#import-select-all').addEventListener('change', () => {
+  const checked = $('#import-select-all').checked;
+  importPreview.forEach((r) => { if (r.ok) r.selected = checked; });
+  renderImportPreview();
+});
+
+// CSV template download (data URL, no server roundtrip).
+$('#import-template-link').addEventListener('click', (ev) => {
+  ev.preventDefault();
+  const tmpl = 'ObjectName,Latitude,Longitude,SymbolTable,SymbolID,Comment,IntervalMinutes\nDCFR_3,33.79,-84.32,/,r,DCFR Station 3,30\nSHELTER1,33.81,-84.34,/,h,Red Cross Shelter,15\n';
+  const blob = new Blob([tmpl], {type: 'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'emcomm-objects-template.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 // ---------- Activity log + SSE ----------
 
 const logList = $('#log-list');
@@ -481,6 +911,7 @@ function startEvents() {
 
 (async function init() {
   initMap();
+  updateSymPreview(); // paint initial /r preview
   try {
     const cfg = await API.config();
     $('#station-info').textContent =

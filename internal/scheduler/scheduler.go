@@ -133,6 +133,17 @@ func (s *Scheduler) KillNow(ctx context.Context, name string) error {
 	return s.submit(ctx, request{kind: reqKill, name: name})
 }
 
+// ReviveNow brings a killed object back to live status, clearing ExpiresAt
+// (so a past expiry doesn't immediately re-kill it) and zeroing LastBeacon
+// so the next scheduler tick fires a fresh live beacon. The object will
+// re-appear as a live object on receivers that see the next live packet.
+//
+// Returns store.ErrNotKilled if the object is currently live (revive is
+// a state transition, not a no-op).
+func (s *Scheduler) ReviveNow(ctx context.Context, name string) error {
+	return s.submit(ctx, request{kind: reqRevive, name: name})
+}
+
 // ErrObjectNotFound is returned for unknown object names.
 var ErrObjectNotFound = errors.New("scheduler: object not found")
 
@@ -142,6 +153,7 @@ var ErrObjectKilled = errors.New("scheduler: object is killed; cannot beacon")
 const (
 	reqBeacon = "beacon"
 	reqKill   = "kill"
+	reqRevive = "revive"
 )
 
 type request struct {
@@ -171,9 +183,27 @@ func (s *Scheduler) handleRequest(r request) error {
 		return s.beaconLive(r.name, time.Now(), true)
 	case reqKill:
 		return s.startKill(r.name, time.Now())
+	case reqRevive:
+		return s.revive(r.name)
 	default:
 		return fmt.Errorf("unknown request kind %q", r.kind)
 	}
+}
+
+// revive flips a killed object back to live and persists. The next checkAll
+// tick will fire a live beacon (LastBeacon was reset to zero by Resurrect).
+func (s *Scheduler) revive(name string) error {
+	if err := s.store.Resurrect(name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("%w: %s", ErrObjectNotFound, name)
+		}
+		return err
+	}
+	s.log.Info("revived", "object", name)
+	if err := s.store.Save(); err != nil {
+		s.log.Error("persist revive failed", "object", name, "err", err)
+	}
+	return nil
 }
 
 // checkAll iterates the current object list and processes each. For any

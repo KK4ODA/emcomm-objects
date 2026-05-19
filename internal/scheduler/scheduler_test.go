@@ -330,6 +330,67 @@ func TestKillSpacing_RespectsKillInterval(t *testing.T) {
 	}
 }
 
+func TestReviveNow_RestoresLifeAndFiresLiveBeaconOnNextTick(t *testing.T) {
+	now := time.Now().UTC()
+	st := newStore(t, store.Object{
+		ObjectName: "A", SymbolTable: "/", SymbolID: "r",
+		Latitude: 33, Longitude: -84,
+		IntervalMinutes: 30, Enabled: true,
+		Status:          store.StatusKilled,
+		KillBeaconsLeft: 0,
+		KilledAt:        store.LooseTime{Time: now.Add(-time.Minute)},
+		ExpiresAt:       store.LooseTime{Time: now.Add(-time.Hour)}, // past!
+		LastBeacon:      store.LooseTime{Time: now.Add(-time.Minute)},
+	})
+	r := &recorder{}
+	sch := New(st, r.Live(), r.Killed(), Options{TickInterval: 30 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { sch.Run(ctx); close(done) }()
+
+	if err := sch.ReviveNow(ctx, "A"); err != nil {
+		t.Fatalf("ReviveNow: %v", err)
+	}
+	// Give one tick to fire the live beacon.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+
+	if r.KilledCount() != 0 {
+		t.Errorf("revive should not send kill packets, got %d", r.KilledCount())
+	}
+	if r.LiveCount() < 1 {
+		t.Errorf("revive should fire a live beacon on next tick, got %d", r.LiveCount())
+	}
+	got, _ := st.Get("A")
+	if got.IsKilled() {
+		t.Error("object should be live after revive")
+	}
+	if !got.ExpiresAt.IsZero() {
+		t.Errorf("ExpiresAt should be cleared (else past expiry re-kills immediately): %v", got.ExpiresAt)
+	}
+}
+
+func TestReviveNow_NotKilled(t *testing.T) {
+	st := newStore(t, store.Object{
+		ObjectName: "A", SymbolTable: "/", SymbolID: "r",
+		Enabled: true, IntervalMinutes: 30,
+	})
+	r := &recorder{}
+	sch := New(st, r.Live(), r.Killed(), Options{TickInterval: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { sch.Run(ctx); close(done) }()
+	if err := sch.ReviveNow(ctx, "A"); !errors.Is(err, store.ErrNotKilled) {
+		t.Errorf("got %v, want ErrNotKilled", err)
+	}
+	cancel()
+	<-done
+}
+
 func TestBeaconNow_Unknown(t *testing.T) {
 	st := newStore(t)
 	r := &recorder{}

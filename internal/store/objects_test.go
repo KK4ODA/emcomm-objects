@@ -362,6 +362,55 @@ func TestNeverBeaconed(t *testing.T) {
 	}
 }
 
+func TestResurrect(t *testing.T) {
+	s := tempStore(t)
+	now := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Hour)
+	s.Upsert(Object{
+		ObjectName: "X", SymbolTable: "/", SymbolID: "r",
+		LastBeacon: LooseTime{Time: now.Add(-10 * time.Minute)},
+		ExpiresAt:  LooseTime{Time: past}, // was the reason for the kill
+	})
+	s.StartKill("X", 3, now)
+	s.DecrementKillBeacon("X", now) // drain one
+	// state before revive: killed, KillBeaconsLeft=2, ExpiresAt=past, KilledAt set, LastBeacon set.
+
+	if err := s.Resurrect("X"); err != nil {
+		t.Fatalf("Resurrect: %v", err)
+	}
+	got, _ := s.Get("X")
+	if got.Status != StatusLive {
+		t.Errorf("Status: got %q, want %q", got.Status, StatusLive)
+	}
+	if got.KillBeaconsLeft != 0 {
+		t.Errorf("KillBeaconsLeft should be 0, got %d", got.KillBeaconsLeft)
+	}
+	if !got.KilledAt.IsZero() {
+		t.Errorf("KilledAt should be cleared, got %v", got.KilledAt)
+	}
+	if !got.ExpiresAt.IsZero() {
+		t.Errorf("ExpiresAt should be cleared (else would re-kill), got %v", got.ExpiresAt)
+	}
+	if !got.LastBeacon.IsZero() {
+		t.Errorf("LastBeacon should be zeroed (force immediate beacon), got %v", got.LastBeacon)
+	}
+}
+
+func TestResurrect_NotKilled(t *testing.T) {
+	s := tempStore(t)
+	s.Upsert(Object{ObjectName: "X", SymbolTable: "/", SymbolID: "r"})
+	if err := s.Resurrect("X"); err != ErrNotKilled {
+		t.Errorf("got %v, want ErrNotKilled", err)
+	}
+}
+
+func TestResurrect_NotFound(t *testing.T) {
+	s := tempStore(t)
+	if err := s.Resurrect("missing"); err != ErrNotFound {
+		t.Errorf("got %v, want ErrNotFound", err)
+	}
+}
+
 func TestMarkBeaconed(t *testing.T) {
 	s := tempStore(t)
 	s.Upsert(Object{ObjectName: "X", SymbolTable: "/", SymbolID: "r"})

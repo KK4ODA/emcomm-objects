@@ -87,6 +87,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/objects/{name}", s.handleDeleteObject)
 	mux.HandleFunc("POST /api/objects/{name}/beacon", s.handleBeaconNow)
 	mux.HandleFunc("POST /api/objects/{name}/kill", s.handleKillNow)
+	mux.HandleFunc("POST /api/objects/{name}/revive", s.handleReviveNow)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("GET /api/events", s.handleSSE)
@@ -221,6 +222,37 @@ func (s *Server) handleKillNow(w http.ResponseWriter, r *http.Request) {
 type killResponse struct {
 	Object store.Object `json:"object"`
 	Note   string       `json:"note,omitempty"`
+}
+
+// handleReviveNow flips a killed object back to live status, clears its
+// ExpiresAt, and zeroes LastBeacon so the next scheduler tick fires a
+// live beacon. The object is back on the air (from receivers' perspective)
+// within ~10 seconds (one tick).
+//
+// Status responses:
+//
+//	200 OK         — revived; live beacon fires on next tick
+//	404 Not Found  — unknown object
+//	409 Conflict   — object is not killed (revive is a state transition only)
+func (s *Server) handleReviveNow(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	err := s.sched.ReviveNow(ctx, name)
+	switch {
+	case err == nil:
+	case errors.Is(err, scheduler.ErrObjectNotFound):
+		writeError(w, http.StatusNotFound, "object %q not found", name)
+		return
+	case errors.Is(err, store.ErrNotKilled):
+		writeError(w, http.StatusConflict, "object %q is not killed", name)
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "revive: %v", err)
+		return
+	}
+	o, _ := s.store.Get(name)
+	writeJSON(w, http.StatusOK, o)
 }
 
 type statusResponse struct {

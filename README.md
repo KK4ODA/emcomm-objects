@@ -49,6 +49,14 @@ cp config.example.yaml config.yaml
 
 Then open http://127.0.0.1:8765/.
 
+## Third-party assets
+
+This app embeds the APRS symbol sprites from
+[hessu/aprs-symbols](https://github.com/hessu/aprs-symbols) by Heikki
+Hannikainen (OH7LZB). See `internal/web/ui/symbols/COPYRIGHT.md` for the
+full attribution; the set is derived from Stephen Smith's (WA8LMF)
+canonical APRS symbol set.
+
 ## License
 
 TBD.
