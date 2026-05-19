@@ -972,6 +972,7 @@ function importNameCell(idx, row) {
   const input = el('input', {
     type: 'text',
     maxlength: 9,
+    size: 9,
     class: 'import-name-input',
     value: row.object.ObjectName || '',
     title: 'Edit to override the auto-generated name (max 9 APRS chars)',

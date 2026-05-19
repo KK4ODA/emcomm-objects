@@ -255,8 +255,11 @@ input:focus, select:focus { outline: 2px solid #2e7d32; outline-offset: -1px; }
 .import-name-input {
   font-family: ui-monospace, monospace;
   font-size: 12px;
-  width: 9ch;
+  /* Show all 9 chars: 9ch for content + padding + a tiny safety margin so
+     proportional-ish browser glyphs don't clip the last char. */
+  width: 10ch;
   padding: 2px 4px;
+  box-sizing: content-box;
 }
 .import-name-original {
   font-size: 10px;
