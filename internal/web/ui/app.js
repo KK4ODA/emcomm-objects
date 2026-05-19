@@ -109,12 +109,27 @@ function initMap() {
   });
 }
 
+// markerStateByName remembers Killed and beacon-timing info per marker so
+// updateMarkerLabels() can refresh tooltips every second without rerendering
+// the whole layer.
+const markerStateByName = new Map();
+
 function refreshMarkers() {
   markerLayer.clearLayers();
   markersByName.clear();
+  markerStateByName.clear();
   const points = [];
   for (const o of objects) {
-    const m = L.marker([o.Latitude, o.Longitude], {title: o.ObjectName});
+    const killed = (o.Status === 'killed');
+    const sym = symbolMarkerHtml(o.SymbolTable, o.SymbolID, killed);
+    const icon = L.divIcon({
+      html: sym,
+      className: 'aprs-marker' + (killed ? ' killed' : ''),
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+      popupAnchor: [0, -14],
+    });
+    const m = L.marker([o.Latitude, o.Longitude], {icon, title: o.ObjectName});
     const popup = el('div', {class: 'obj-marker-popup'},
       el('b', {}, o.ObjectName),
       el('div', {class: 'info'}, `${o.SymbolTable}${o.SymbolID} · ${o.Comment || ''}`),
@@ -123,12 +138,98 @@ function refreshMarkers() {
                    el('button', {class: 'secondary', onclick: () => beaconNow(o.ObjectName)}, 'Beacon now')),
     );
     m.bindPopup(popup);
+    m.bindTooltip(beaconLabel(o), {
+      permanent: true,
+      direction: 'right',
+      offset: [14, 0],
+      className: 'beacon-label' + (killed ? ' killed' : ''),
+    });
     markerLayer.addLayer(m);
     markersByName.set(o.ObjectName, m);
+    markerStateByName.set(o.ObjectName, {
+      killed,
+      enabled: o.Enabled,
+      intervalMinutes: o.IntervalMinutes,
+      lastBeacon: o.LastBeacon,
+      expiresAt: o.ExpiresAt,
+    });
     points.push([o.Latitude, o.Longitude]);
   }
   if (points.length > 0) {
     map.fitBounds(L.latLngBounds(points), {padding: [30, 30], maxZoom: 14});
+  }
+}
+
+// symbolMarkerHtml returns the inline HTML for one map pin. Killed pins get
+// a CSS class that handles greyscale + X overlay (style.css).
+function symbolMarkerHtml(table, code, killed) {
+  const spriteUrl = table === '/' ? 'symbols/aprs-symbols-24-0.png' : 'symbols/aprs-symbols-24-1.png';
+  const n = (code && code.length > 0) ? code.charCodeAt(0) - 33 : -1;
+  let bg = '';
+  if (n >= 0 && n < 96) {
+    const row = Math.floor(n / 16);
+    const col = n % 16;
+    bg = `background-image:url(${spriteUrl});background-position:-${col*24}px -${row*24}px;`;
+  }
+  return `<span class="marker-sprite" style="${bg}"></span>`;
+}
+
+// beaconLabel returns the text shown next to a marker.
+//   live + enabled + interval > 0  →  "next: 1m 23s" or "due now"
+//   live + disabled or 0 interval  →  "disabled" or "manual"
+//   killed                         →  "killed"
+function beaconLabel(o) {
+  if (o.Status === 'killed') {
+    return o.KillBeaconsLeft > 0
+      ? `killing (${o.KillBeaconsLeft} left)`
+      : 'killed';
+  }
+  if (!o.Enabled || o.IntervalMinutes <= 0) {
+    return 'manual';
+  }
+  return 'next: ' + nextBeaconText(o.LastBeacon, o.IntervalMinutes, Date.now());
+}
+
+// nextBeaconText returns "1m 23s", "now", "due now (12s ago)", etc.
+function nextBeaconText(lastBeacon, intervalMinutes, nowMs) {
+  if (!lastBeacon || lastBeacon.startsWith('0001-')) return 'now';
+  const last = Date.parse(lastBeacon);
+  if (isNaN(last)) return '?';
+  const due = last + intervalMinutes * 60 * 1000;
+  const ms = due - nowMs;
+  if (ms <= 0) {
+    const overdueSec = Math.round(-ms / 1000);
+    return `due now (${formatDuration(overdueSec)} ago)`;
+  }
+  return formatDuration(Math.round(ms / 1000));
+}
+
+function formatDuration(sec) {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+// updateMarkerLabels refreshes every marker's tooltip text in place. Cheap
+// (just innerHTML on the tooltip element); safe to call once per second.
+function updateMarkerLabels() {
+  const now = Date.now();
+  for (const [name, m] of markersByName) {
+    const st = markerStateByName.get(name);
+    if (!st) continue;
+    let txt;
+    if (st.killed) {
+      txt = 'killed';
+    } else if (!st.enabled || st.intervalMinutes <= 0) {
+      txt = 'manual';
+    } else {
+      txt = 'next: ' + nextBeaconText(st.lastBeacon, st.intervalMinutes, now);
+    }
+    const tt = m.getTooltip();
+    if (tt && tt.getContent() !== txt) tt.setContent(txt);
   }
 }
 
@@ -949,4 +1050,6 @@ function startEvents() {
   } catch (e) { logLine('error', `status: ${e.message}`); }
   await reload();
   startEvents();
+  // Refresh marker countdown labels every second. Cheap: just text updates.
+  setInterval(updateMarkerLabels, 1000);
 })();

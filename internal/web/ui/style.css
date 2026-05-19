@@ -343,6 +343,59 @@ input:focus, select:focus { outline: 2px solid #2e7d32; outline-offset: -1px; }
   outline: 2px solid #c8e6c9;
   outline-offset: -1px;
 }
+
+/* Map markers — divIcon with sprite + optional killed overlay */
+.aprs-marker {
+  /* Reset Leaflet's default divIcon background/border. */
+  background: transparent;
+  border: none;
+}
+.marker-sprite {
+  display: block;
+  width: 24px;
+  height: 24px;
+  background-repeat: no-repeat;
+}
+/* Killed objects: desaturate sprite + red X overlay. */
+.aprs-marker.killed .marker-sprite {
+  filter: grayscale(1) opacity(0.5);
+}
+.aprs-marker.killed::after {
+  content: "✕";
+  position: absolute;
+  top: -2px;
+  left: 0;
+  width: 24px;
+  height: 24px;
+  text-align: center;
+  font-size: 26px;
+  line-height: 24px;
+  font-weight: 900;
+  color: rgba(198, 40, 40, 0.85);
+  text-shadow: 0 0 2px white, 0 0 4px white;
+  pointer-events: none;
+}
+
+/* Tooltip label next to each marker (countdown / killed badge). */
+.beacon-label {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #bbb;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: #333;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+}
+/* Leaflet adds an arrow ::before by default; hide for compactness. */
+.beacon-label.leaflet-tooltip-right::before,
+.beacon-label.leaflet-tooltip-left::before { display: none; }
+.beacon-label.killed {
+  color: #c62828;
+  border-color: #c62828;
+  background: rgba(255, 235, 238, 0.95);
+}
 #log-list .log-state-connected { color: #2e7d32; font-weight: 600; }
 #log-list .log-state-connecting { color: #ed6c02; }
 #log-list .log-state-disconnected { color: #c62828; font-weight: 600; }
