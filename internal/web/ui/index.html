@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>emcomm-objects</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>emcomm-objects</h1>
+  <div class="status">
+    <span class="badge" id="kiss-badge" data-state="disconnected">KISS: disconnected</span>
+    <span id="station-info" class="muted"></span>
+  </div>
+</header>
+
+<main>
+  <section id="map-pane" class="pane">
+    <div id="map"></div>
+  </section>
+
+  <section id="control-pane" class="pane">
+    <div class="tabs">
+      <button class="tab active" data-tab="objects">Objects</button>
+      <button class="tab" data-tab="add">Add / Edit</button>
+      <button class="tab" data-tab="log">Activity</button>
+    </div>
+
+    <div class="tab-panel active" data-tab-panel="objects">
+      <div class="toolbar">
+        <button id="reload-btn">Reload</button>
+        <span class="grow"></span>
+        <button id="beacon-due-btn" title="Manually trigger any object whose interval has elapsed">Beacon due now</button>
+      </div>
+      <table id="objects-table">
+        <thead><tr>
+          <th>Name</th>
+          <th>Sym</th>
+          <th>Lat</th>
+          <th>Lon</th>
+          <th>Interval</th>
+          <th>Last beacon</th>
+          <th>On</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="objects-tbody"></tbody>
+      </table>
+      <p id="empty-msg" class="muted" hidden>No objects yet. Use the Add tab to create one, or copy your <code>pinpointAprsObjects.json</code> to the <code>objects_file</code> path.</p>
+    </div>
+
+    <div class="tab-panel" data-tab-panel="add">
+      <form id="object-form">
+        <input type="hidden" id="f-original-name">
+        <div class="row">
+          <label>Name (max 9)
+            <input type="text" id="f-name" maxlength="9" required pattern="[ -~]+">
+          </label>
+          <label>Interval (min)
+            <input type="number" id="f-interval" min="0" max="1440" value="30" required>
+          </label>
+        </div>
+        <div class="row">
+          <label>Latitude
+            <input type="number" id="f-lat" step="any" min="-90" max="90" required>
+          </label>
+          <label>Longitude
+            <input type="number" id="f-lon" step="any" min="-180" max="180" required>
+          </label>
+          <button type="button" id="f-pick-btn" title="Click on the map to set lat/lon">Pick on map</button>
+        </div>
+        <div class="row">
+          <label>Symbol table
+            <select id="f-table">
+              <option value="/" selected>/ (primary)</option>
+              <option value="\">\ (alternate)</option>
+            </select>
+          </label>
+          <label>Symbol code
+            <input type="text" id="f-sym" maxlength="1" value="r" required>
+          </label>
+          <span class="hint">e.g. <code>/r</code> = red dot, <code>/&gt;</code> = car, <code>\R</code> = restaurant</span>
+        </div>
+        <label>Comment
+          <input type="text" id="f-comment" maxlength="64">
+        </label>
+        <label>Path override (optional)
+          <input type="text" id="f-path" placeholder="WIDE1-1,WIDE2-1">
+        </label>
+        <div class="row">
+          <label class="checkbox">
+            <input type="checkbox" id="f-enabled" checked> Enabled (auto-beacon on interval)
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="submit" id="f-save">Save</button>
+          <button type="button" id="f-cancel">Cancel</button>
+          <button type="button" id="f-delete" class="danger" hidden>Delete</button>
+        </div>
+        <p id="form-error" class="error" hidden></p>
+      </form>
+    </div>
+
+    <div class="tab-panel" data-tab-panel="log">
+      <ol id="log-list"></ol>
+    </div>
+  </section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="app.js"></script>
+</body>
+</html>

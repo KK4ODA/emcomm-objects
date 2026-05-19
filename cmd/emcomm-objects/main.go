@@ -25,6 +25,7 @@ import (
 	"github.com/kk4oda/emcomm-objects/internal/scheduler"
 	"github.com/kk4oda/emcomm-objects/internal/store"
 	"github.com/kk4oda/emcomm-objects/internal/transmit"
+	"github.com/kk4oda/emcomm-objects/internal/web"
 )
 
 func main() {
@@ -98,10 +99,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	kissClient := kiss.NewClient(cfg.KISS.Address, byte(cfg.KISS.Port), log.With("comp", "kiss"), nil)
+	broker := web.NewBroker(50)
+	kissClient := kiss.NewClient(cfg.KISS.Address, byte(cfg.KISS.Port), log.With("comp", "kiss"), broker.KISSStateHook())
 	go kissClient.Run(ctx)
 
 	sender := transmit.NewSender(cfg, kissClient, log.With("comp", "tx"))
+	sender.OnPacket = broker.PacketHook()
 
 	if *beaconName != "" {
 		o, ok := st.Get(*beaconName)
@@ -137,8 +140,14 @@ func main() {
 		"web_enabled", cfg.Web.Enabled,
 		"web_listen", cfg.Web.Listen,
 	)
+
 	if cfg.Web.Enabled {
-		log.Warn("web UI not yet implemented; running scheduler-only")
+		srv := web.New(cfg, st, sch, kissClient, broker, log.With("comp", "web"))
+		go func() {
+			if err := srv.ListenAndServe(ctx); err != nil {
+				log.Error("web server stopped", "err", err)
+			}
+		}()
 	}
 
 	sch.Run(ctx)
