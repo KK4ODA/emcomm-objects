@@ -25,6 +25,7 @@ import (
 	"github.com/kk4oda/emcomm-objects/internal/scheduler"
 	"github.com/kk4oda/emcomm-objects/internal/store"
 	"github.com/kk4oda/emcomm-objects/internal/transmit"
+	"github.com/kk4oda/emcomm-objects/internal/version"
 	"github.com/kk4oda/emcomm-objects/internal/web"
 )
 
@@ -36,8 +37,14 @@ func main() {
 		listFlag   = flag.Bool("list", false, "list objects from the JSON store and exit")
 		initFlag   = flag.Bool("init-config", false, "write an example config.yaml at -config path and exit")
 		verbose    = flag.Bool("v", false, "verbose (debug) logging")
+		showVer    = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
+
+	if *showVer {
+		fmt.Println("emcomm-objects", version.String())
+		return
+	}
 
 	level := slog.LevelInfo
 	if *verbose {
@@ -134,6 +141,7 @@ func main() {
 	})
 
 	log.Info("daemon starting",
+		"version", version.String(),
 		"callsign", cfg.Station.Callsign,
 		"kiss", cfg.KISS.Address,
 		"objects", cfg.Storage.ObjectsFile,

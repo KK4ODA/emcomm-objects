@@ -1,5 +1,9 @@
 # emcomm-objects
 
+[![Release](https://img.shields.io/github/v/release/KK4ODA/emcomm-objects?display_name=tag&sort=semver)](https://github.com/KK4ODA/emcomm-objects/releases/latest)
+[![CI](https://github.com/KK4ODA/emcomm-objects/actions/workflows/ci.yml/badge.svg)](https://github.com/KK4ODA/emcomm-objects/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Companion app for [Graywolf APRS](https://github.com/chrissnell/graywolf): manage and beacon APRS objects (events, served agencies, deployed units) via Graywolf's KISS port.
 
 Inspired by the object-management UX in Pinpoint APRS and YAAC, but built for use alongside Graywolf rather than as a full APRS client.
@@ -40,14 +44,27 @@ In Graywolf's web UI (http://127.0.0.1:8080/), add a **KISS Interface**:
 
 ### emcomm-objects side
 
+**Option A: download a prebuilt binary** (recommended)
+
+Grab the archive for your OS/arch from the [latest release](https://github.com/KK4ODA/emcomm-objects/releases/latest). Extract; copy `config.example.yaml` to `config.yaml`; edit it (set your callsign-SSID, Graywolf KISS host:port, objects file path); run:
+
 ```
+./emcomm-objects                 # Linux/macOS
+emcomm-objects.exe               # Windows
+```
+
+**Option B: build from source** (Go 1.22+ required)
+
+```
+git clone https://github.com/KK4ODA/emcomm-objects
+cd emcomm-objects
 go build ./cmd/emcomm-objects
 cp config.example.yaml config.yaml
-# edit config.yaml: set callsign-ssid, KISS host:port, objects file path
+# edit config.yaml
 ./emcomm-objects
 ```
 
-Then open http://127.0.0.1:8765/.
+Then open <http://127.0.0.1:8765/>.
 
 ## Third-party assets
 

@@ -1,0 +1,41 @@
+# emcomm-objects configuration. Copy to config.yaml and edit.
+
+station:
+  # Source callsign with SSID for transmitted beacons. Use an SSID distinct
+  # from Graywolf's own station SSID to avoid the iGate's self-echo
+  # suppression. e.g. if Graywolf is N0CALL-1, use N0CALL-12 here.
+  callsign: "N0CALL-12"
+
+  # AX.25 destination ("tocall"). APZEMC is a safe experimental prefix that
+  # identifies this app in aprs.fi etc. Change only if you have a registered
+  # tocall.
+  tocall: "APZEMC"
+
+  # Digipeater path.
+  #   ""              direct, no digipeater (hyper-local; won't reach aprs.fi
+  #                   unless an iGate is in simplex range of your radio)
+  #   "WIDE1-1"       1 hop (recommended for fixed-location objects)
+  #   "WIDE1-1,WIDE2-1"  2 hops (mobile/tactical; more congestion)
+  path: "WIDE1-1,WIDE2-1"
+
+kiss:
+  # TCP address of Graywolf's KISS interface.
+  #
+  # In Graywolf's web UI (http://127.0.0.1:8080) you must:
+  #   1. Add a KISS Interface with type=TCP (server / listening)
+  #   2. Operating mode = "modem" (NOT "tnc" — tnc silently drops our frames)
+  #   3. Listen address = 127.0.0.1:6700
+  #   4. Map KISS port 0 to the channel that has the VHF APRS modem
+  address: "127.0.0.1:6700"
+
+  # KISS port byte (0-15). Usually 0 unless Graywolf's ChannelMap is set.
+  port: 0
+
+storage:
+  # Path to the objects JSON file. Compatible with Pinpoint APRS's
+  # pinpointAprsObjects.json — you can copy yours here.
+  objects_file: "./objects.json"
+
+web:
+  enabled: true
+  listen: "127.0.0.1:8765"
