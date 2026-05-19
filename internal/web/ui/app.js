@@ -147,7 +147,7 @@ function renderTable() {
     const rowClass = killed ? 'obj-killed' : (o.Enabled ? '' : 'obj-disabled');
     const tr = el('tr', {class: rowClass},
       el('td', {}, o.ObjectName),
-      el('td', {class: 'symbol-cell'}, `${o.SymbolTable}${o.SymbolID}`),
+      el('td', {class: 'symbol-cell'}, symSprite(o.SymbolTable, o.SymbolID)),
       el('td', {}, o.Latitude.toFixed(5)),
       el('td', {}, o.Longitude.toFixed(5)),
       el('td', {}, `${o.IntervalMinutes}m`),
@@ -500,6 +500,23 @@ function symbolName(table, code) {
   return m[code] || '';
 }
 
+// symSprite returns a span element with the right sprite painted in.
+// Used in both the form preview and the objects table.
+function symSprite(table, code) {
+  const spriteUrl = table === '/' ? 'symbols/aprs-symbols-24-0.png' : 'symbols/aprs-symbols-24-1.png';
+  const n = (code && code.length > 0) ? code.charCodeAt(0) - 33 : -1;
+  const name = symbolName(table, code);
+  const title = name ? `${table}${code} — ${name}` : `${table}${code}`;
+  const span = el('span', {class: 'sym-sprite', title});
+  if (n >= 0 && n < 96) {
+    const row = Math.floor(n / 16);
+    const col = n % 16;
+    span.style.backgroundImage = `url(${spriteUrl})`;
+    span.style.backgroundPosition = `-${col * 24}px -${row * 24}px`;
+  }
+  return span;
+}
+
 // renderSymGrid populates a grid div with 96 sprite cells for one table.
 // onClick fires with (table, code).
 function renderSymGrid(div, table) {
@@ -740,7 +757,7 @@ function renderImportPreview() {
       el('td', {}, o.ObjectName || '(missing)'),
       el('td', {}, typeof o.Latitude === 'number' ? o.Latitude.toFixed(5) : '—'),
       el('td', {}, typeof o.Longitude === 'number' ? o.Longitude.toFixed(5) : '—'),
-      el('td', {class: 'symbol-cell'}, `${o.SymbolTable}${o.SymbolID}`),
+      el('td', {class: 'symbol-cell'}, symSprite(o.SymbolTable, o.SymbolID)),
       el('td', {}, `${o.IntervalMinutes}m`),
       el('td', {}, o.Comment || ''),
       el('td', {}, statusCell),
