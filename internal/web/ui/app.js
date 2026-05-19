@@ -9,6 +9,7 @@ const API = {
   }).then(jsonOrThrow),
   remove:  (name) => fetch(`/api/objects/${encodeURIComponent(name)}`, {method: 'DELETE'}).then(noContent),
   beacon:  (name) => fetch(`/api/objects/${encodeURIComponent(name)}/beacon`, {method: 'POST'}).then(jsonOrThrow),
+  kill:    (name) => fetch(`/api/objects/${encodeURIComponent(name)}/kill`, {method: 'POST'}).then(jsonOrThrow),
   status:  () => fetch('/api/status').then(jsonOrThrow),
   config:  () => fetch('/api/config').then(jsonOrThrow),
 };
@@ -141,20 +142,111 @@ function renderTable() {
   }
   $('#empty-msg').hidden = true;
   for (const o of objects) {
-    const tr = el('tr', {class: o.Enabled ? '' : 'obj-disabled'},
+    const killed = (o.Status === 'killed');
+    const rowClass = killed ? 'obj-killed' : (o.Enabled ? '' : 'obj-disabled');
+    const tr = el('tr', {class: rowClass},
       el('td', {}, o.ObjectName),
       el('td', {class: 'symbol-cell'}, `${o.SymbolTable}${o.SymbolID}`),
       el('td', {}, o.Latitude.toFixed(5)),
       el('td', {}, o.Longitude.toFixed(5)),
       el('td', {}, `${o.IntervalMinutes}m`),
       el('td', {}, fmtLastBeacon(o.LastBeacon)),
-      el('td', {}, o.Enabled ? '✓' : ''),
+      el('td', {}, statusBadge(o)),
       el('td', {class: 'obj-actions'},
-        el('button', {onclick: () => beaconNow(o.ObjectName)}, 'Beacon'),
-        el('button', {class: 'secondary', onclick: () => loadIntoForm(o)}, 'Edit'),
+        actionButtons(o, killed),
       ),
     );
     tbody.appendChild(tr);
+  }
+}
+
+// statusBadge returns an inline element describing the object's lifecycle
+// state: live / kill-pending / killed / disabled / expires-in-X.
+function statusBadge(o) {
+  if (o.Status === 'killed') {
+    if (o.KillBeaconsLeft > 0) {
+      return el('span', {class: 'badge badge-killing'},
+        `killing (${o.KillBeaconsLeft} left)`);
+    }
+    return el('span', {class: 'badge badge-killed'}, 'killed');
+  }
+  if (!o.Enabled) {
+    return el('span', {class: 'badge badge-off'}, 'disabled');
+  }
+  if (o.ExpiresAt && !o.ExpiresAt.startsWith('0001-')) {
+    const exp = new Date(o.ExpiresAt);
+    if (!isNaN(exp)) {
+      const ms = exp.getTime() - Date.now();
+      if (ms <= 0) {
+        return el('span', {class: 'badge badge-expiring'}, 'expired (pending kill)');
+      }
+      const mins = Math.round(ms / 60000);
+      if (mins < 60) return el('span', {class: 'badge badge-warn'}, `expires in ${mins}m`);
+      if (mins < 24 * 60) return el('span', {class: 'badge badge-live'}, `expires in ${Math.round(mins/60)}h`);
+      return el('span', {class: 'badge badge-live'}, `expires ${exp.toLocaleDateString()}`);
+    }
+  }
+  return el('span', {class: 'badge badge-live'}, 'live');
+}
+
+// actionButtons returns the per-row action buttons. Killed objects show
+// "Delete" only (you can't beacon/edit a dead object; delete just removes
+// it from the local file — does NOT un-kill on the network).
+function actionButtons(o, killed) {
+  if (killed) {
+    return el('span', {},
+      el('button', {class: 'secondary', onclick: () => deleteRow(o.ObjectName)}, 'Delete'),
+    );
+  }
+  return el('span', {},
+    el('button', {onclick: () => beaconNow(o.ObjectName)}, 'Beacon'),
+    el('button', {class: 'secondary', onclick: () => loadIntoForm(o)}, 'Edit'),
+    twoStepKillButton(o.ObjectName),
+  );
+}
+
+// twoStepKillButton: first click reveals "Click again to confirm" for 5s.
+// Idle reset prevents an accidental click much later from killing the object.
+function twoStepKillButton(name) {
+  const btn = el('button', {class: 'danger'}, 'Kill');
+  let armed = false;
+  let timer = null;
+  const disarm = () => { armed = false; btn.textContent = 'Kill'; btn.classList.remove('armed'); if (timer) { clearTimeout(timer); timer = null; } };
+  btn.addEventListener('click', async () => {
+    if (!armed) {
+      armed = true;
+      btn.textContent = 'Click to confirm';
+      btn.classList.add('armed');
+      timer = setTimeout(disarm, 5000);
+      return;
+    }
+    disarm();
+    await killNow(name);
+  });
+  return btn;
+}
+
+async function killNow(name) {
+  try {
+    const resp = await API.kill(name);
+    if (resp && resp.note) {
+      logLine('warn', `${name}: ${resp.note}`);
+    } else {
+      logLine('info', `${name}: kill sequence started (3 packets, ~35s apart)`);
+    }
+    await reload();
+  } catch (e) {
+    logLine('error', `kill ${name}: ${e.message}`);
+  }
+}
+
+async function deleteRow(name) {
+  if (!confirm(`Delete ${name} from local store? (Does NOT un-kill on the APRS network.)`)) return;
+  try {
+    await API.remove(name);
+    await reload();
+  } catch (e) {
+    logLine('error', `delete ${name}: ${e.message}`);
   }
 }
 
@@ -217,6 +309,7 @@ function clearForm() {
   $('#f-sym').value = 'r';
   $('#f-comment').value = '';
   setPath('');
+  $('#f-expires').value = '';
   $('#f-interval').value = '30';
   $('#f-enabled').checked = true;
   $('#f-delete').hidden = true;
@@ -234,11 +327,31 @@ function loadIntoForm(o) {
   $('#f-sym').value = o.SymbolID;
   $('#f-comment').value = o.Comment || '';
   setPath(o.Path || '');
+  $('#f-expires').value = expiresAtToInput(o.ExpiresAt);
   $('#f-interval').value = o.IntervalMinutes;
   $('#f-enabled').checked = !!o.Enabled;
   $('#f-delete').hidden = false;
   $('#form-error').hidden = true;
   showTab('add');
+}
+
+// ExpiresAt round-trip:
+//  Server stores UTC RFC3339 (or our zero sentinel "0001-...").
+//  <input type="datetime-local"> uses "YYYY-MM-DDTHH:MM" in *local* time.
+// expiresAtToInput converts server → input; expiresAtFromInput goes the other way.
+function expiresAtToInput(s) {
+  if (!s || s.startsWith('0001-')) return '';
+  const d = new Date(s);
+  if (isNaN(d)) return '';
+  // Local-time YYYY-MM-DDTHH:MM (no seconds, no timezone — datetime-local wants this exact shape).
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function expiresAtFromInput(s) {
+  if (!s) return '0001-01-01T00:00:00'; // server's "no expiry" sentinel
+  const d = new Date(s); // browser interprets datetime-local as local time
+  if (isNaN(d)) return '0001-01-01T00:00:00';
+  return d.toISOString(); // RFC3339 UTC
 }
 
 form.addEventListener('submit', async (ev) => {
@@ -256,6 +369,7 @@ form.addEventListener('submit', async (ev) => {
     LastBeacon: "0001-01-01T00:00:00",
     Enabled: $('#f-enabled').checked,
     Path: getPath(),
+    ExpiresAt: expiresAtFromInput($('#f-expires').value),
   };
   try {
     await API.upsert(body.ObjectName, body);

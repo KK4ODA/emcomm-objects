@@ -127,6 +127,16 @@ button.secondary { background: #607d8b; border-color: #455a64; }
 button.secondary:hover { background: #455a64; }
 button.danger { background: #c62828; border-color: #8e1212; }
 button.danger:hover { background: #8e1212; }
+/* Two-step kill button: armed state pulses to draw attention. */
+button.danger.armed {
+  background: #ff8f00;
+  border-color: #b76e00;
+  animation: pulse 0.8s ease-in-out infinite alternate;
+}
+@keyframes pulse {
+  from { transform: scale(1); }
+  to   { transform: scale(1.05); }
+}
 
 /* Objects table */
 table {
@@ -148,7 +158,24 @@ tbody tr:hover { background: #fafafa; }
   font-size: 12px;
 }
 .obj-disabled { color: #999; }
+.obj-killed { color: #aaa; text-decoration: line-through; background: #fafafa; }
+.obj-killed .symbol-cell { text-decoration: none; }
 .symbol-cell { font-family: ui-monospace, monospace; }
+
+/* Status badges in the table — distinct from KISS-state badges above. */
+td .badge {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+.badge-live     { background: #e8f5e9; color: #1b5e20; }
+.badge-warn     { background: #fff3e0; color: #e65100; }
+.badge-expiring { background: #ffe0b2; color: #c62828; }
+.badge-killing  { background: #ffcdd2; color: #b71c1c; }
+.badge-killed   { background: #eeeeee; color: #616161; }
+.badge-off      { background: #eceff1; color: #607d8b; }
 
 /* Form */
 form { display: flex; flex-direction: column; gap: 10px; }

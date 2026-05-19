@@ -76,10 +76,33 @@ func (o Object) Validate() error {
 	return nil
 }
 
-// BuildPacket formats the APRS object packet info field (the bytes that go
-// after the AX.25 control/PID, before the FCS). `now` is used for the
-// timestamp; pass time.Now().UTC() in production.
+// Live/killed indicator bytes per APRS spec ch.11.
+const (
+	indicatorLive   byte = '*'
+	indicatorKilled byte = '_'
+)
+
+// BuildPacket formats an APRS LIVE object packet info field.
+// Equivalent to buildObjectPacket(o, now, live=true).
 func BuildPacket(o Object, now time.Time) (string, error) {
+	return buildObjectPacket(o, now, indicatorLive)
+}
+
+// BuildKilledPacket formats an APRS KILLED object packet info field. Same
+// structure as a live packet but with '_' in place of '*'. Receivers that
+// previously saw the live object will mark it as killed/expired and remove
+// it from their map.
+//
+// Per spec, the killed packet must come from the SAME source callsign that
+// originated the object. Sending a kill from a different SSID is a no-op:
+// receivers can't tell it's "the same object" and ignore it.
+func BuildKilledPacket(o Object, now time.Time) (string, error) {
+	return buildObjectPacket(o, now, indicatorKilled)
+}
+
+// buildObjectPacket is the shared implementation. `now` is the timestamp
+// that goes in the packet (UTC-converted internally).
+func buildObjectPacket(o Object, now time.Time, indicator byte) (string, error) {
 	if err := o.Validate(); err != nil {
 		return "", err
 	}
@@ -92,7 +115,7 @@ func BuildPacket(o Object, now time.Time) (string, error) {
 	sb.Grow(64 + len(o.Comment))
 	sb.WriteByte(';')
 	sb.WriteString(name)
-	sb.WriteByte('*') // live object
+	sb.WriteByte(indicator)
 	sb.WriteString(ts)
 	sb.WriteString(lat)
 	sb.WriteByte(o.SymbolTable)

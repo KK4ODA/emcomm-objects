@@ -63,6 +63,13 @@ func (t LooseTime) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + t.Time.UTC().Format(time.RFC3339) + `"`), nil
 }
 
+// Object status constants. Stored as a string for forward-compat (Pinpoint
+// preserves but ignores; older emcomm-objects versions just see "live").
+const (
+	StatusLive   = "live"   // normal operation; beacon on interval
+	StatusKilled = "killed" // killed; draining KillBeaconsLeft, then silent
+)
+
 // Object mirrors Pinpoint's JSON shape and adds emcomm-specific fields.
 type Object struct {
 	ObjectName      string    `json:"ObjectName"`
@@ -78,8 +85,34 @@ type Object struct {
 
 	// emcomm-objects additions (ignored by Pinpoint):
 	Enabled bool   `json:"Enabled"`
-	Path    string `json:"Path,omitempty"` // override default digipeater path
+	Path    string `json:"Path,omitempty"` // "" = use station default, "-" = direct
+
+	// Lifecycle / kill semantics. All omitempty so files written by older
+	// versions of this app, or by Pinpoint, round-trip cleanly.
+	ExpiresAt       LooseTime `json:"ExpiresAt,omitempty"`       // zero = never auto-expires
+	Status          string    `json:"Status,omitempty"`          // "" treated as "live"
+	KillBeaconsLeft int       `json:"KillBeaconsLeft,omitempty"` // count of remaining kill TX
+	KilledAt        LooseTime `json:"KilledAt,omitempty"`        // when transition to killed happened
 }
+
+// StatusOrDefault returns the object's status with empty treated as "live".
+// Use this everywhere instead of comparing o.Status directly to handle
+// files written before the Status field existed.
+func (o Object) StatusOrDefault() string {
+	if o.Status == "" {
+		return StatusLive
+	}
+	return o.Status
+}
+
+// IsKilled reports whether the object has been killed (regardless of whether
+// its kill-beacon sequence has finished draining).
+func (o Object) IsKilled() bool { return o.StatusOrDefault() == StatusKilled }
+
+// NeverBeaconed reports whether this object has never had a live beacon
+// transmitted. Used to decide whether sending a kill packet would create
+// a ghost on receivers (don't kill what nobody knows about).
+func (o Object) NeverBeaconed() bool { return o.LastBeacon.IsZero() }
 
 // Validate checks required fields and basic constraints.
 func (o Object) Validate() error {
@@ -103,6 +136,12 @@ func (o Object) Validate() error {
 	}
 	if o.IntervalMinutes < 0 {
 		return fmt.Errorf("IntervalMinutes %d must be >= 0", o.IntervalMinutes)
+	}
+	if o.Status != "" && o.Status != StatusLive && o.Status != StatusKilled {
+		return fmt.Errorf("Status %q must be %q or %q (or empty)", o.Status, StatusLive, StatusKilled)
+	}
+	if o.KillBeaconsLeft < 0 {
+		return fmt.Errorf("KillBeaconsLeft %d must be >= 0", o.KillBeaconsLeft)
 	}
 	return nil
 }
@@ -228,6 +267,12 @@ func (s *Store) Get(name string) (Object, bool) {
 }
 
 // Upsert adds or replaces an object by name. Validates before persisting.
+// Lifecycle fields (LastBeacon, Status, KillBeaconsLeft, KilledAt) are
+// preserved from the existing row even if the caller didn't set them —
+// these are scheduler-managed and a UI edit form must not be able to
+// accidentally resurrect a killed object or wipe its kill progress.
+// To explicitly transition to killed, use StartKill. To bring back a
+// killed object, use Resurrect (when it exists).
 func (s *Store) Upsert(o Object) error {
 	if err := o.Validate(); err != nil {
 		return err
@@ -236,10 +281,14 @@ func (s *Store) Upsert(o Object) error {
 	defer s.mu.Unlock()
 	for i, ex := range s.objects {
 		if ex.ObjectName == o.ObjectName {
-			// Preserve LastBeacon if caller didn't set it.
 			if o.LastBeacon.IsZero() {
 				o.LastBeacon = ex.LastBeacon
 			}
+			// Lifecycle fields are never overwritten by Upsert — only by
+			// the dedicated methods below.
+			o.Status = ex.Status
+			o.KillBeaconsLeft = ex.KillBeaconsLeft
+			o.KilledAt = ex.KilledAt
 			s.objects[i] = o
 			return nil
 		}
@@ -274,3 +323,61 @@ func (s *Store) MarkBeaconed(name string, t time.Time) bool {
 	}
 	return false
 }
+
+// StartKill transitions an object to killed status with the given number
+// of kill beacons remaining. Idempotent: if the object is already killed,
+// returns ErrAlreadyKilled and does not reset the counter (so an accidental
+// second click doesn't re-arm a draining sequence). Returns ErrNotFound if
+// the object doesn't exist.
+//
+// killBeacons may be 0 — useful for the "object auto-expired but was never
+// live-beaconed" case, where we want to mark it dead locally but must not
+// broadcast a kill (which would create a ghost on receivers).
+func (s *Store) StartKill(name string, killBeacons int, now time.Time) error {
+	if killBeacons < 0 {
+		return fmt.Errorf("StartKill: killBeacons must be >= 0, got %d", killBeacons)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, ex := range s.objects {
+		if ex.ObjectName == name {
+			if ex.StatusOrDefault() == StatusKilled {
+				return ErrAlreadyKilled
+			}
+			s.objects[i].Status = StatusKilled
+			s.objects[i].KillBeaconsLeft = killBeacons
+			s.objects[i].KilledAt = LooseTime{now}
+			// Reset LastBeacon so the scheduler's "is it time?" check fires
+			// the first kill immediately on the next tick.
+			s.objects[i].LastBeacon = LooseTime{}
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+// DecrementKillBeacon decrements KillBeaconsLeft by 1 (floor 0) and sets
+// LastBeacon to t. Use this after successfully transmitting a kill packet.
+// Returns false if the object doesn't exist.
+func (s *Store) DecrementKillBeacon(name string, t time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, ex := range s.objects {
+		if ex.ObjectName == name {
+			if s.objects[i].KillBeaconsLeft > 0 {
+				s.objects[i].KillBeaconsLeft--
+			}
+			s.objects[i].LastBeacon = LooseTime{t}
+			return true
+		}
+	}
+	return false
+}
+
+// Standard errors for kill operations. Callers compare with errors.Is.
+var (
+	ErrNotFound      = errors.New("object not found")
+	ErrAlreadyKilled = errors.New("object already killed")
+	ErrNeverBeaconed = errors.New("object was never live-beaconed; refusing to send kill (would create a ghost)")
+	ErrNoKillBeacons = errors.New("object has no remaining kill beacons")
+)

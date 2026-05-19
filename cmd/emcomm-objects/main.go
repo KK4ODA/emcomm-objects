@@ -128,7 +128,7 @@ func main() {
 		return
 	}
 
-	sch := scheduler.New(st, sender.Transmit, scheduler.Options{
+	sch := scheduler.New(st, sender.Transmit, sender.TransmitKilled, scheduler.Options{
 		TickInterval: 10 * time.Second,
 		Logger:       log.With("comp", "sched"),
 	})

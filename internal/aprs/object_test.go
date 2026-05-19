@@ -210,6 +210,52 @@ func TestBuildPacket_NonUTCTimeConverted(t *testing.T) {
 	}
 }
 
+func TestBuildKilledPacket_Format(t *testing.T) {
+	// Killed packet: same shape as live, but with '_' in place of '*'.
+	o := validObject()
+	now := time.Date(2026, 5, 19, 21, 23, 0, 0, time.UTC)
+	live, err := BuildPacket(o, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	killed, err := BuildKilledPacket(o, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should differ in exactly one byte: position 10 (after ';' + 9-char name).
+	if len(live) != len(killed) {
+		t.Fatalf("length mismatch: live=%d killed=%d", len(live), len(killed))
+	}
+	if live[10] != '*' || killed[10] != '_' {
+		t.Errorf("indicator bytes wrong: live[10]=%q killed[10]=%q", live[10], killed[10])
+	}
+	// All other bytes identical.
+	for i := 0; i < len(live); i++ {
+		if i == 10 {
+			continue
+		}
+		if live[i] != killed[i] {
+			t.Errorf("byte %d differs unexpectedly: live=%q killed=%q", i, live[i], killed[i])
+		}
+	}
+}
+
+func TestBuildKilledPacket_DCFR1(t *testing.T) {
+	o := Object{
+		Name: "DCFR_1", Latitude: 33.8011357, Longitude: -84.3301389,
+		SymbolTable: '/', SymbolCode: 'r', Comment: "DCFR Station 1",
+	}
+	now := time.Date(2026, 5, 19, 21, 23, 0, 0, time.UTC)
+	got, err := BuildKilledPacket(o, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ";DCFR_1   _192123z3348.07N/08419.81WrDCFR Station 1"
+	if got != want {
+		t.Errorf("\n got  %q\n want %q", got, want)
+	}
+}
+
 func validObject() Object {
 	return Object{
 		Name:        "TEST",

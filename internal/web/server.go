@@ -86,6 +86,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/objects/{name}", s.handleUpsertObject)
 	mux.HandleFunc("DELETE /api/objects/{name}", s.handleDeleteObject)
 	mux.HandleFunc("POST /api/objects/{name}/beacon", s.handleBeaconNow)
+	mux.HandleFunc("POST /api/objects/{name}/kill", s.handleKillNow)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("GET /api/events", s.handleSSE)
@@ -160,6 +161,10 @@ func (s *Server) handleBeaconNow(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "object %q not found", name)
 			return
 		}
+		if errors.Is(err, scheduler.ErrObjectKilled) {
+			writeError(w, http.StatusConflict, "cannot beacon: object %q is killed", name)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "beacon: %v", err)
 		return
 	}
@@ -169,6 +174,53 @@ func (s *Server) handleBeaconNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleKillNow transitions the object to killed status and fires the first
+// kill packet immediately. Drains 2 more kill packets over the next ticks.
+//
+// Status responses:
+//
+//	200 OK              — kill sequence started, first packet sent
+//	200 OK + body note  — object was never beaconed; marked killed silently (no packets sent)
+//	404 Not Found       — unknown object
+//	409 Conflict        — already killed (idempotent rejection)
+//	500                 — transmit failure (state still updated to killed)
+func (s *Server) handleKillNow(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	err := s.sched.KillNow(ctx, name)
+	switch {
+	case err == nil:
+		// Success: first kill sent, remainder will drain on schedule.
+	case errors.Is(err, scheduler.ErrObjectNotFound):
+		writeError(w, http.StatusNotFound, "object %q not found", name)
+		return
+	case errors.Is(err, store.ErrAlreadyKilled):
+		writeError(w, http.StatusConflict, "object %q is already killed", name)
+		return
+	case errors.Is(err, store.ErrNeverBeaconed):
+		// Not really an error from the user's perspective — we did mark it
+		// killed locally, just didn't broadcast. Surface as 200 with a note
+		// so the UI can display it.
+		o, _ := s.store.Get(name)
+		writeJSON(w, http.StatusOK, killResponse{
+			Object: o,
+			Note:   "object was never live-beaconed; marked killed locally without sending kill packets",
+		})
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "kill: %v", err)
+		return
+	}
+	o, _ := s.store.Get(name)
+	writeJSON(w, http.StatusOK, killResponse{Object: o})
+}
+
+type killResponse struct {
+	Object store.Object `json:"object"`
+	Note   string       `json:"note,omitempty"`
 }
 
 type statusResponse struct {

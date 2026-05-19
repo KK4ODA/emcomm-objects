@@ -219,6 +219,149 @@ func TestLoadStripsUTF8BOM(t *testing.T) {
 	}
 }
 
+func TestStartKill(t *testing.T) {
+	s := tempStore(t)
+	s.Upsert(Object{
+		ObjectName: "X", SymbolTable: "/", SymbolID: "r",
+		Latitude: 33, Longitude: -84,
+		LastBeacon: LooseTime{time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)},
+	})
+	now := time.Date(2026, 5, 19, 18, 0, 0, 0, time.UTC)
+
+	if err := s.StartKill("X", 3, now); err != nil {
+		t.Fatalf("StartKill: %v", err)
+	}
+	got, _ := s.Get("X")
+	if got.Status != StatusKilled {
+		t.Errorf("Status = %q, want %q", got.Status, StatusKilled)
+	}
+	if got.KillBeaconsLeft != 3 {
+		t.Errorf("KillBeaconsLeft = %d, want 3", got.KillBeaconsLeft)
+	}
+	if !got.KilledAt.Equal(now) {
+		t.Errorf("KilledAt = %v, want %v", got.KilledAt, now)
+	}
+	// LastBeacon must be reset so scheduler fires the first kill immediately.
+	if !got.LastBeacon.IsZero() {
+		t.Errorf("LastBeacon should be zero after StartKill, got %v", got.LastBeacon)
+	}
+
+	// Second call is idempotent: returns ErrAlreadyKilled, does not reset counter.
+	// First decrement one to prove the counter isn't reset on the second call.
+	s.DecrementKillBeacon("X", now)
+	if err := s.StartKill("X", 3, now); err == nil {
+		t.Error("StartKill on killed object should return error")
+	}
+	if got, _ := s.Get("X"); got.KillBeaconsLeft != 2 {
+		t.Errorf("counter should stay at 2 after redundant StartKill, got %d", got.KillBeaconsLeft)
+	}
+}
+
+func TestStartKill_NotFound(t *testing.T) {
+	s := tempStore(t)
+	if err := s.StartKill("missing", 3, time.Now()); err != ErrNotFound {
+		t.Errorf("got %v, want ErrNotFound", err)
+	}
+}
+
+func TestStartKill_NegativeCountRejected(t *testing.T) {
+	s := tempStore(t)
+	s.Upsert(Object{ObjectName: "X", SymbolTable: "/", SymbolID: "r"})
+	if err := s.StartKill("X", -1, time.Now()); err == nil {
+		t.Error("StartKill(-1) should error")
+	}
+}
+
+func TestStartKill_ZeroCountAllowed(t *testing.T) {
+	// 0 = silent kill for never-beaconed-then-expired objects.
+	s := tempStore(t)
+	s.Upsert(Object{ObjectName: "X", SymbolTable: "/", SymbolID: "r"})
+	if err := s.StartKill("X", 0, time.Now()); err != nil {
+		t.Errorf("StartKill(0): %v", err)
+	}
+	got, _ := s.Get("X")
+	if got.Status != StatusKilled || got.KillBeaconsLeft != 0 {
+		t.Errorf("expected silent kill: %+v", got)
+	}
+}
+
+func TestDecrementKillBeacon(t *testing.T) {
+	s := tempStore(t)
+	s.Upsert(Object{ObjectName: "X", SymbolTable: "/", SymbolID: "r",
+		LastBeacon: LooseTime{time.Now()}})
+	now := time.Date(2026, 5, 19, 18, 0, 0, 0, time.UTC)
+	s.StartKill("X", 3, now)
+
+	for i := 2; i >= 0; i-- {
+		t1 := now.Add(time.Duration(3-i) * 35 * time.Second)
+		s.DecrementKillBeacon("X", t1)
+		got, _ := s.Get("X")
+		if got.KillBeaconsLeft != i {
+			t.Errorf("after decrement %d: counter = %d, want %d", 3-i, got.KillBeaconsLeft, i)
+		}
+		if !got.LastBeacon.Equal(t1) {
+			t.Errorf("LastBeacon not updated: got %v", got.LastBeacon)
+		}
+	}
+	// Already at 0 — further calls don't go negative.
+	s.DecrementKillBeacon("X", now)
+	if got, _ := s.Get("X"); got.KillBeaconsLeft != 0 {
+		t.Errorf("counter went negative: %d", got.KillBeaconsLeft)
+	}
+}
+
+func TestUpsertPreservesLifecycleFields(t *testing.T) {
+	s := tempStore(t)
+	s.Upsert(Object{
+		ObjectName: "X", SymbolTable: "/", SymbolID: "r",
+		Latitude: 33, Longitude: -84,
+		LastBeacon: LooseTime{time.Now()},
+	})
+	s.StartKill("X", 3, time.Now())
+
+	// Simulate a UI edit form that submits without lifecycle fields.
+	s.Upsert(Object{
+		ObjectName: "X", SymbolTable: "/", SymbolID: "r",
+		Latitude: 34, Longitude: -85,
+		Comment: "renamed via UI",
+		// Status, KillBeaconsLeft, KilledAt deliberately omitted.
+	})
+
+	got, _ := s.Get("X")
+	if got.Status != StatusKilled {
+		t.Errorf("Upsert clobbered Status: got %q", got.Status)
+	}
+	if got.KillBeaconsLeft != 3 {
+		t.Errorf("Upsert clobbered KillBeaconsLeft: got %d", got.KillBeaconsLeft)
+	}
+	if got.KilledAt.IsZero() {
+		t.Error("Upsert clobbered KilledAt")
+	}
+	// But the user's actual edits did stick.
+	if got.Latitude != 34 || got.Comment != "renamed via UI" {
+		t.Errorf("user edits lost: %+v", got)
+	}
+}
+
+func TestStatusOrDefault(t *testing.T) {
+	// Empty status (old file) should read as live.
+	if (Object{}).StatusOrDefault() != StatusLive {
+		t.Error("empty status should default to live")
+	}
+	if (Object{Status: StatusKilled}).StatusOrDefault() != StatusKilled {
+		t.Error("explicit killed should stay killed")
+	}
+}
+
+func TestNeverBeaconed(t *testing.T) {
+	if !(Object{}).NeverBeaconed() {
+		t.Error("default object should be NeverBeaconed")
+	}
+	if (Object{LastBeacon: LooseTime{time.Now()}}).NeverBeaconed() {
+		t.Error("object with LastBeacon set should not be NeverBeaconed")
+	}
+}
+
 func TestMarkBeaconed(t *testing.T) {
 	s := tempStore(t)
 	s.Upsert(Object{ObjectName: "X", SymbolTable: "/", SymbolID: "r"})

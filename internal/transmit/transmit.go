@@ -28,6 +28,7 @@ type Sender struct {
 type PacketEvent struct {
 	When     time.Time
 	Object   string
+	Killed   bool // true if this was a kill packet ('_' indicator), not a live beacon
 	Source   ax25.Address
 	Dest     ax25.Address
 	Path     []ax25.Address
@@ -43,9 +44,21 @@ func NewSender(cfg config.Config, client *kiss.Client, log *slog.Logger) *Sender
 	return &Sender{cfg: cfg, client: client, log: log}
 }
 
-// Transmit builds and sends a single beacon for the given object. Suitable
-// as the TransmitFunc passed to scheduler.New.
+// Transmit builds and sends a single LIVE beacon for the given object.
+// Suitable as the TransmitFunc passed to scheduler.New.
 func (s *Sender) Transmit(o store.Object, now time.Time) error {
+	return s.send(o, now, false)
+}
+
+// TransmitKilled builds and sends a single KILLED beacon (APRS '_' indicator)
+// for the given object. Same AX.25 wrapping as a live beacon; only the
+// indicator byte in the APRS info field differs.
+func (s *Sender) TransmitKilled(o store.Object, now time.Time) error {
+	return s.send(o, now, true)
+}
+
+// send is the shared implementation. killed=true selects '_' indicator.
+func (s *Sender) send(o store.Object, now time.Time, killed bool) error {
 	src := s.cfg.Source()
 	dest := s.cfg.Dest()
 	path := s.cfg.Path()
@@ -72,10 +85,18 @@ func (s *Sender) Transmit(o store.Object, now time.Time) error {
 		Comment:     o.Comment,
 		AltitudeFt:  o.Altitude,
 	}
-	info, err := aprs.BuildPacket(apr, now)
+
+	var info string
+	var err error
+	if killed {
+		info, err = aprs.BuildKilledPacket(apr, now)
+	} else {
+		info, err = aprs.BuildPacket(apr, now)
+	}
 	if err != nil {
 		return fmt.Errorf("object %q: build packet: %w", o.ObjectName, err)
 	}
+
 	frame, err := ax25.EncodeUI(dest, src, path, []byte(info))
 	if err != nil {
 		return fmt.Errorf("object %q: encode AX.25: %w", o.ObjectName, err)
@@ -83,8 +104,13 @@ func (s *Sender) Transmit(o store.Object, now time.Time) error {
 	if err := s.client.SendAX25(frame); err != nil {
 		return fmt.Errorf("object %q: send: %w", o.ObjectName, err)
 	}
+	kind := "live"
+	if killed {
+		kind = "killed"
+	}
 	s.log.Info("transmitted",
 		"object", o.ObjectName,
+		"kind", kind,
 		"src", src.String(),
 		"dest", dest.String(),
 		"path", o.Path,
@@ -94,6 +120,7 @@ func (s *Sender) Transmit(o store.Object, now time.Time) error {
 		s.OnPacket(PacketEvent{
 			When:     now,
 			Object:   o.ObjectName,
+			Killed:   killed,
 			Source:   src,
 			Dest:     dest,
 			Path:     path,

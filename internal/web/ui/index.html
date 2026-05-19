@@ -43,7 +43,7 @@
           <th>Lon</th>
           <th>Interval</th>
           <th>Last beacon</th>
-          <th>On</th>
+          <th>Status</th>
           <th></th>
         </tr></thead>
         <tbody id="objects-tbody"></tbody>
@@ -99,6 +99,10 @@
         </label>
         <label id="f-path-custom-wrap" hidden>Custom path
           <input type="text" id="f-path-custom" placeholder="e.g. RELAY,WIDE1-1">
+        </label>
+        <label>Expires (local time, optional)
+          <input type="datetime-local" id="f-expires">
+          <span class="hint">When this time passes, the object is automatically killed (3 kill packets sent, then it stops beaconing). Leave blank for no auto-expiry.</span>
         </label>
         <div class="row">
           <label class="checkbox">
