@@ -172,6 +172,41 @@ async function reload() {
 
 const form = $('#object-form');
 
+// Path field has a preset dropdown + custom text input that appears when
+// "Custom…" is chosen. Values mapped into Object.Path:
+//   ""               → use station default (server config)
+//   "-"              → explicit direct (no digipeater)
+//   "WIDE1-1" etc.   → that path
+// PATH_PRESETS lists every value that has a dedicated <option> in the select;
+// anything else is shown via the Custom… input.
+const PATH_PRESETS = ['', '-', 'WIDE1-1', 'WIDE1-1,WIDE2-1', 'WIDE2-1', 'WIDE2-2'];
+
+function getPath() {
+  const preset = $('#f-path-preset').value;
+  if (preset === '__custom__') return $('#f-path-custom').value.trim();
+  return preset;
+}
+
+function setPath(val) {
+  const customWrap = $('#f-path-custom-wrap');
+  const customInput = $('#f-path-custom');
+  if (PATH_PRESETS.includes(val)) {
+    $('#f-path-preset').value = val;
+    customWrap.hidden = true;
+    customInput.value = '';
+  } else {
+    $('#f-path-preset').value = '__custom__';
+    customWrap.hidden = false;
+    customInput.value = val;
+  }
+}
+
+$('#f-path-preset').addEventListener('change', () => {
+  const isCustom = $('#f-path-preset').value === '__custom__';
+  $('#f-path-custom-wrap').hidden = !isCustom;
+  if (isCustom) $('#f-path-custom').focus();
+});
+
 function clearForm() {
   $('#f-original-name').value = '';
   $('#f-name').value = '';
@@ -181,7 +216,7 @@ function clearForm() {
   $('#f-table').value = '/';
   $('#f-sym').value = 'r';
   $('#f-comment').value = '';
-  $('#f-path').value = '';
+  setPath('');
   $('#f-interval').value = '30';
   $('#f-enabled').checked = true;
   $('#f-delete').hidden = true;
@@ -198,7 +233,7 @@ function loadIntoForm(o) {
   $('#f-table').value = o.SymbolTable;
   $('#f-sym').value = o.SymbolID;
   $('#f-comment').value = o.Comment || '';
-  $('#f-path').value = o.Path || '';
+  setPath(o.Path || '');
   $('#f-interval').value = o.IntervalMinutes;
   $('#f-enabled').checked = !!o.Enabled;
   $('#f-delete').hidden = false;
@@ -220,7 +255,7 @@ form.addEventListener('submit', async (ev) => {
     Altitude: 0,
     LastBeacon: "0001-01-01T00:00:00",
     Enabled: $('#f-enabled').checked,
-    Path: $('#f-path').value.trim(),
+    Path: getPath(),
   };
   try {
     await API.upsert(body.ObjectName, body);

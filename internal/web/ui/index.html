@@ -86,8 +86,19 @@
         <label>Comment
           <input type="text" id="f-comment" maxlength="64">
         </label>
-        <label>Path override (optional)
-          <input type="text" id="f-path" placeholder="WIDE1-1,WIDE2-1">
+        <label>Digipeater path
+          <select id="f-path-preset">
+            <option value="" selected>(use station default)</option>
+            <option value="-">(direct — no digipeater)</option>
+            <option value="WIDE1-1">WIDE1-1 (1 hop, fixed/local — recommended for objects)</option>
+            <option value="WIDE1-1,WIDE2-1">WIDE1-1,WIDE2-1 (2 hops, mobile/tactical)</option>
+            <option value="WIDE2-1">WIDE2-1 (1 wide hop, skip fill-in)</option>
+            <option value="WIDE2-2">WIDE2-2 (2 wide hops — legacy, may be filtered)</option>
+            <option value="__custom__">Custom…</option>
+          </select>
+        </label>
+        <label id="f-path-custom-wrap" hidden>Custom path
+          <input type="text" id="f-path-custom" placeholder="e.g. RELAY,WIDE1-1">
         </label>
         <div class="row">
           <label class="checkbox">

@@ -49,8 +49,13 @@ func (s *Sender) Transmit(o store.Object, now time.Time) error {
 	src := s.cfg.Source()
 	dest := s.cfg.Dest()
 	path := s.cfg.Path()
-	// Per-object path override.
-	if o.Path != "" {
+	// Per-object path override. Two sentinels:
+	//   ""  → use station default (already loaded above)
+	//   "-" → explicit direct override (no digipeater path)
+	// Any other value is parsed as a real path.
+	if o.Path == "-" {
+		path = nil
+	} else if o.Path != "" {
 		p, err := ax25.ParsePath(o.Path)
 		if err != nil {
 			return fmt.Errorf("object %q path: %w", o.ObjectName, err)
