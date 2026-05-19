@@ -251,6 +251,22 @@ input:focus, select:focus { outline: 2px solid #2e7d32; outline-offset: -1px; }
 #import-preview th input[type="checkbox"] { margin: 0; }
 #import-preview td { padding: 4px; }
 #import-summary { font-style: italic; }
+.import-name-wrap { display: flex; flex-direction: column; gap: 1px; }
+.import-name-input {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  width: 9ch;
+  padding: 2px 4px;
+}
+.import-name-original {
+  font-size: 10px;
+  color: #888;
+  font-style: italic;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Symbol picker — inline preview in form */
 .sym-row { align-items: flex-end; }

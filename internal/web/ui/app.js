@@ -40,6 +40,7 @@ let objects = [];          // last fetched list
 let map, markerLayer;
 let markersByName = new Map();
 let pickingForForm = false;
+let stationCallsign = '';  // populated from /api/config; used for CSV auto-naming
 
 // ---------- DOM helpers ----------
 
@@ -766,9 +767,74 @@ function parseCSV(text) {
   return { headers, rows };
 }
 
-// validateImportRow returns { ok, object, errors[] } for one parsed CSV row.
-// existingNames is a Set of names already in the store (for collision detection).
-function validateImportRow(headers, raw, existingNames) {
+// deriveStationTag returns a short uppercase tag derived from the operator's
+// callsign — used to make auto-generated names less likely to collide with
+// the same name beaconed by another station. e.g. "KK4ODA-12" → "OD".
+// Returns "" if callsign is empty/odd-shaped.
+function deriveStationTag(callsign) {
+  if (!callsign) return '';
+  const base = callsign.split('-')[0].replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  return base.slice(-2);
+}
+
+// generateAprsName produces a 1..9-char APRS-compatible object name from a
+// long human name. Tries (in order) two abbreviation strategies, then
+// truncation. Appends stationTag at the end (eating into the 9-char budget).
+// Dedupes against existingNames by substituting a digit suffix on collision.
+//
+// Examples (with stationTag="OD"):
+//   "DeKalb County Fire Station 1"        → "DCFS1OD"
+//   "DeKalb County Fire Rescue Admin (HQ)"→ "DCFRAHQOD"  (9 chars, truncated)
+//   "Red Cross Shelter Avondale"          → "RCSAOD"
+//   "Atlanta Airport"                     → "AAOD"
+function generateAprsName(longName, existingNames, stationTag) {
+  const tag = stationTag || '';
+  const budget = 9 - tag.length;
+  if (budget < 1) return ''; // shouldn't happen
+
+  // Strategy 1: take all uppercase letters and digits (preserves "DCFS12" style).
+  let abbrev = (longName.match(/[A-Z0-9]/g) || []).join('');
+
+  // Strategy 2: if S1 gave nothing usable, take first letter of each word
+  // plus any standalone digit-only words.
+  if (abbrev.length === 0) {
+    abbrev = longName.split(/[\s_\-]+/).map(w => {
+      if (/^\d+$/.test(w)) return w;
+      return w.charAt(0).toUpperCase();
+    }).join('');
+  }
+
+  // Sanitize: only A-Z, 0-9 in APRS object names (printable-ASCII spec, but
+  // we keep to alnum for clarity).
+  abbrev = abbrev.replace(/[^A-Z0-9]/g, '');
+
+  // Truncate to budget.
+  let base = abbrev.slice(0, budget);
+  if (base === '') base = 'OBJ'; // fallback for purely non-alphanumeric inputs
+
+  let candidate = base + tag;
+  if (!existingNames.has(candidate)) return candidate;
+
+  // Collision: substitute last char of base with 2..9, then A..Z.
+  // 34 attempts before giving up.
+  for (let i = 2; i < 36; i++) {
+    const suffix = i < 10 ? String(i) : String.fromCharCode(65 + i - 10); // 2-9, then A-Z
+    const trimmedBase = base.slice(0, Math.max(1, budget - 1));
+    candidate = trimmedBase + suffix + tag;
+    if (!existingNames.has(candidate)) return candidate;
+  }
+  // Total exhaustion (very unlikely): use first 9 chars of original and hope.
+  return abbrev.slice(0, 9) || 'OBJ';
+}
+
+// validateImportRow returns { ok, object, errors[], originalName, autoNamed,
+// collides } for one parsed CSV row.
+//   storeNames: names that already exist in the persisted store (drives the
+//     "collides" flag, so the UI shows skip/overwrite/rename for that row).
+//   takenInImport: names taken by earlier rows of THIS import (mutated; auto-
+//     naming uses storeNames ∪ takenInImport to avoid picking duplicates).
+//   stationTag: 2-char suffix appended to auto-generated names; pass "" to skip.
+function validateImportRow(headers, raw, storeNames, takenInImport, stationTag) {
   const obj = {
     ShowTooltip: true,
     SymbolTable: '/',
@@ -797,6 +863,29 @@ function validateImportRow(headers, raw, existingNames) {
       obj[key] = v;
     }
   }
+
+  // Auto-name long names. Keep the original for display + Comment.
+  const originalName = obj.ObjectName || '';
+  let autoNamed = false;
+  // generateAprsName needs to avoid both store names AND names already taken
+  // by earlier import rows in the same batch.
+  const allTaken = new Set([...storeNames, ...takenInImport]);
+  if (obj.ObjectName && obj.ObjectName.length > 9) {
+    obj.ObjectName = generateAprsName(obj.ObjectName, allTaken, stationTag);
+    autoNamed = true;
+  } else if (obj.ObjectName && takenInImport.has(obj.ObjectName)) {
+    // Two CSV rows share an explicit short name — dedupe the second.
+    obj.ObjectName = generateAprsName(obj.ObjectName, allTaken, '');
+    autoNamed = true; // operator should review the rename
+  }
+  if (obj.ObjectName) takenInImport.add(obj.ObjectName);
+
+  // If Comment is empty and we auto-named, drop the original (truncated) in.
+  // APRS spec recommends keeping object comments under ~43 chars for old TNCs.
+  if (autoNamed && !obj.Comment && originalName) {
+    obj.Comment = originalName.slice(0, 40);
+  }
+
   // Validate required fields.
   if (!obj.ObjectName) errs.push('missing ObjectName');
   if (obj.ObjectName && obj.ObjectName.length > 9) errs.push('ObjectName > 9 chars');
@@ -810,7 +899,11 @@ function validateImportRow(headers, raw, existingNames) {
     ok: errs.length === 0,
     object: obj,
     errors: errs,
-    collides: existingNames.has(obj.ObjectName),
+    originalName,
+    autoNamed,
+    // collides = the picked (possibly auto-generated) name matches something
+    // already in the persisted store. Triggers per-row skip/overwrite/rename.
+    collides: storeNames.has(obj.ObjectName),
   };
 }
 
@@ -855,7 +948,7 @@ function renderImportPreview() {
       : el('span', {class: 'badge badge-killing', title: row.errors.join('; ')}, 'invalid');
     tbody.appendChild(el('tr', {class: row.ok ? '' : 'obj-disabled'},
       el('td', {}, selBox),
-      el('td', {}, o.ObjectName || '(missing)'),
+      el('td', {class: 'import-name-cell'}, importNameCell(idx, row)),
       el('td', {}, typeof o.Latitude === 'number' ? o.Latitude.toFixed(5) : '—'),
       el('td', {}, typeof o.Longitude === 'number' ? o.Longitude.toFixed(5) : '—'),
       el('td', {class: 'symbol-cell'}, symSprite(o.SymbolTable, o.SymbolID)),
@@ -869,6 +962,47 @@ function renderImportPreview() {
   $('#import-summary').textContent =
     `${importPreview.length} row(s) parsed · ${okCount} valid · ${errCount} invalid · ${collisionCount} collisions. Hover an "invalid" badge for the reason.`;
   updateCommitButton();
+}
+
+// importNameCell renders an editable APRS name field with the long original
+// shown subtly below (so the operator sees both the source-of-truth name
+// and the short identifier going on the air). Editing the input live-updates
+// the row's chosen ObjectName; tag indicates auto-generated rows.
+function importNameCell(idx, row) {
+  const input = el('input', {
+    type: 'text',
+    maxlength: 9,
+    class: 'import-name-input',
+    value: row.object.ObjectName || '',
+    title: 'Edit to override the auto-generated name (max 9 APRS chars)',
+  });
+  input.addEventListener('input', () => {
+    // Update row state.
+    row.object.ObjectName = input.value.trim();
+    // Re-check collision against the persisted store only — intra-import
+    // dedup was the parser's job; if the operator types a new collision
+    // with another import row they can deal with it themselves.
+    const storeNames = new Set(objects.map((o) => o.ObjectName));
+    row.collides = storeNames.has(row.object.ObjectName);
+    // Re-validate length.
+    const goodLen = row.object.ObjectName.length >= 1 && row.object.ObjectName.length <= 9;
+    if (!goodLen) {
+      row.ok = false;
+      row.errors = ['ObjectName must be 1-9 chars'];
+    } else {
+      row.ok = row.errors.filter((e) => !e.startsWith('ObjectName')).length === 0;
+      if (row.ok) row.errors = [];
+    }
+    renderImportPreview(); // re-render to reflect status / commit-button changes
+  });
+  const wrap = el('div', {class: 'import-name-wrap'}, input);
+  if (row.autoNamed && row.originalName) {
+    wrap.appendChild(el('div', {
+      class: 'import-name-original muted',
+      title: row.originalName,
+    }, `auto from: ${row.originalName.slice(0, 32)}${row.originalName.length > 32 ? '…' : ''}`));
+  }
+  return wrap;
 }
 
 function updateCommitButton() {
@@ -944,9 +1078,11 @@ $('#import-parse').addEventListener('click', async () => {
     if (!lower.some((h) => CSV_HEADER_MAP[h] === 'ObjectName')) {
       throw new Error(`CSV must have an "ObjectName" (or "Name") column. Got: ${headers.join(', ')}`);
     }
-    const existingNames = new Set(objects.map((o) => o.ObjectName));
+    const storeNames = new Set(objects.map((o) => o.ObjectName));
+    const takenInImport = new Set();
+    const stationTag = deriveStationTag(stationCallsign);
     importPreview = rows.map((r) => {
-      const v = validateImportRow(headers, r, existingNames);
+      const v = validateImportRow(headers, r, storeNames, takenInImport, stationTag);
       v.selected = v.ok;
       v.action = v.collides ? 'skip' : null;
       return v;
@@ -1032,6 +1168,7 @@ function startEvents() {
   updateSymPreview(); // paint initial /r preview
   try {
     const cfg = await API.config();
+    stationCallsign = cfg.station_callsign || '';
     $('#station-info').textContent =
       `${cfg.station_callsign} → ${cfg.station_tocall}${cfg.station_path ? ' via ' + cfg.station_path : ''}  ·  KISS ${cfg.kiss_address}`;
   } catch (e) { logLine('error', `config: ${e.message}`); }
