@@ -36,6 +36,7 @@ type Event struct {
 // PacketSummary is the public shape of a transmitted packet for the UI.
 type PacketSummary struct {
 	Object   string `json:"object"`
+	Killed   bool   `json:"killed"` // true = kill packet ('_' indicator), false = live ('*')
 	Source   string `json:"source"`
 	Dest     string `json:"dest"`
 	Path     string `json:"path"`
@@ -166,6 +167,7 @@ func (b *Broker) PacketHook() func(transmit.PacketEvent) {
 			When: pe.When,
 			Packet: &PacketSummary{
 				Object:   pe.Object,
+				Killed:   pe.Killed,
 				Source:   pe.Source.String(),
 				Dest:     pe.Dest.String(),
 				Path:     pathStr,

@@ -237,6 +237,9 @@ input:focus, select:focus { outline: 2px solid #2e7d32; outline-offset: -1px; }
 }
 #log-list .log-time { color: #999; margin-right: 6px; }
 #log-list .log-packet { color: #1b5e20; }
+#log-list .log-kill   { color: #b71c1c; font-weight: 600; }
+#log-list .log-warn   { color: #e65100; }
+#log-list .log-info   { color: #1565c0; }
 #log-list .log-state-connected { color: #2e7d32; font-weight: 600; }
 #log-list .log-state-connecting { color: #ed6c02; }
 #log-list .log-state-disconnected { color: #c62828; font-weight: 600; }

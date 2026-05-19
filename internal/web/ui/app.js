@@ -458,7 +458,8 @@ function startEvents() {
     try {
       const e = JSON.parse(ev.data);
       if (e.packet) {
-        logLine('packet', `TX ${e.packet.object}: ${e.packet.info}`, e.when);
+        logLine(e.packet.killed ? 'kill' : 'packet',
+          `${e.packet.killed ? 'KILL' : 'TX'} ${e.packet.object}: ${e.packet.info}`, e.when);
         // Refresh the row's "last beacon" in place.
         reload();
       }
@@ -491,7 +492,8 @@ function startEvents() {
     // Replay any recent events as log entries.
     (s.recent || []).forEach((e) => {
       if (e.type === 'packet' && e.packet) {
-        logLine('packet', `TX ${e.packet.object}: ${e.packet.info}`, e.when);
+        logLine(e.packet.killed ? 'kill' : 'packet',
+          `${e.packet.killed ? 'KILL' : 'TX'} ${e.packet.object}: ${e.packet.info}`, e.when);
       } else if (e.type === 'state') {
         logLine(`state-${e.kiss_state}`, `KISS ${e.kiss_state}`, e.when);
       }
