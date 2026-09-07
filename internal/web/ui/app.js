@@ -226,8 +226,8 @@ function refreshMarkers(fit = false) {
       el('div', { class: 'info' }, `${o.SymbolTable}${o.SymbolID} ${symbolName(o.SymbolTable, o.SymbolID)} · ${o.Latitude.toFixed(4)}, ${o.Longitude.toFixed(4)}`),
       el('div', {}, o.Comment || ''),
       el('div', { class: 'row', style: 'margin-top:8px' },
-        el('button', { class: 'btn', onclick: () => loadIntoForm(o) }, 'Edit'),
-        killed ? null : el('button', { class: 'btn primary', onclick: () => beaconNow(o.ObjectName) }, 'Beacon now')));
+        el('button', { class: 'btn', title: 'Open this object in the edit form', onclick: () => loadIntoForm(o) }, 'Edit'),
+        killed ? null : el('button', { class: 'btn primary', title: 'Transmit this object right now', onclick: () => beaconNow(o.ObjectName) }, 'Beacon now')));
     m.bindPopup(popup);
     m.bindTooltip(markerLabel(o), { permanent: true, direction: 'right', offset: [13, 0], className: 'beacon-label' + (killed ? ' killed' : '') });
     m.on('click', () => selectObject(o.ObjectName, false));
@@ -282,6 +282,20 @@ function statusChip(o) {
   return { cls: 'live', text: `next in ${fmtDuration(ms / 1000)}` };
 }
 
+// chipTitle explains a status chip in one sentence.
+function chipTitle(o) {
+  if (o.Status === 'killed') {
+    return o.KillBeaconsLeft > 0 ? `Kill packets still to send: ${o.KillBeaconsLeft}. Revive puts the object back on the air` : 'Killed: receivers were told to drop it. Revive to bring it back, Delete to forget it';
+  }
+  if (!o.Enabled) return 'Disabled: no automatic beacons. Edit to enable, or click Beacon to send once';
+  if (o.IntervalMinutes <= 0) return 'Manual: sent only when you click Beacon';
+  if (!isZeroTime(o.ExpiresAt)) {
+    const ms = Date.parse(o.ExpiresAt) - Date.now();
+    if (ms <= 3600000) return `Expires ${new Date(o.ExpiresAt).toLocaleString()}; it is killed automatically after that`;
+  }
+  return nextDue(o) <= 0 ? 'Due: goes out on the next scheduler tick once the radio transport is connected' : 'Live: countdown to the next automatic beacon';
+}
+
 function shortStatus(o) {
   if (o.Status === 'killed') return o.KillBeaconsLeft > 0 ? `killing ${o.KillBeaconsLeft}` : 'killed';
   if (!o.Enabled) return 'off';
@@ -321,13 +335,13 @@ function renderList() {
       onmouseleave: () => highlightMarker(o.ObjectName, false),
     },
       el('div', { class: 'sym' }, symSprite(o.SymbolTable, o.SymbolID)),
-      el('div', { class: 'name' }, o.ObjectName, el('span', { class: `chip status ${cls}` }, text)),
+      el('div', { class: 'name', title: 'Object name as sent on the air. Click the card to centre the map on it' }, o.ObjectName, el('span', { class: `chip status ${cls}`, title: chipTitle(o) }, text)),
       el('div', { class: 'meta' },
         o.Comment ? el('span', { class: 'comment', title: o.Comment }, o.Comment) : null,
-        el('span', {}, `${o.Latitude.toFixed(4)}, ${o.Longitude.toFixed(4)}`),
-        el('span', {}, o.IntervalMinutes > 0 ? `every ${o.IntervalMinutes}m` : 'manual'),
-        pathTxt ? el('span', { class: 'mono' }, pathTxt) : null,
-        el('span', { title: 'Last beacon' }, `tx ${fmtAgo(o.LastBeacon)}`)),
+        el('span', { title: 'Position (latitude, longitude)' }, `${o.Latitude.toFixed(4)}, ${o.Longitude.toFixed(4)}`),
+        el('span', { title: o.IntervalMinutes > 0 ? 'Beacon interval' : 'No automatic beacons; send with the Beacon button' }, o.IntervalMinutes > 0 ? `every ${o.IntervalMinutes}m` : 'manual'),
+        pathTxt ? el('span', { class: 'mono', title: 'Digipeater path override for this object' }, pathTxt) : null,
+        el('span', { title: 'Time since the last packet for this object was sent' }, `tx ${fmtAgo(o.LastBeacon)}`)),
       el('div', { class: 'actions' }, ...actionButtons(o, killed)));
     list.appendChild(card);
   }
@@ -631,7 +645,7 @@ function setChannelOptions(channels, selectedId) {
   sel.replaceChildren(el('option', { value: '0' }, 'Graywolf default'));
   for (const ch of channels) {
     const backing = ch.backing && ch.backing.summary ? ` · ${ch.backing.summary}` : '';
-    sel.appendChild(el('option', { value: String(ch.id) }, `${ch.id}: ${ch.name || 'channel'}${backing}`));
+    sel.appendChild(el('option', { value: String(ch.id), title: ch.backing && ch.backing.health ? `Backing: ${ch.backing.summary} (${ch.backing.health})` : '' }, `${ch.id}: ${ch.name || 'channel'}${backing}`));
   }
   if (selectedId && !channels.some((c) => c.id === selectedId)) sel.appendChild(el('option', { value: String(selectedId) }, `Channel ${selectedId}`));
   sel.value = String(selectedId || 0);
@@ -719,7 +733,7 @@ function applyUpdateState(u) {
   updateState = u;
   const pill = $('#update-pill');
   pill.hidden = !(u && u.available);
-  if (u && u.available) pill.textContent = `Update ${u.latest}`;
+  if (u && u.available) { pill.textContent = `Update ${u.latest}`; pill.title = `Version ${u.latest} is available (running ${u.current}). Click for release notes and to install`; }
 }
 $('#update-pill').addEventListener('click', () => {
   const u = updateState;
@@ -784,9 +798,11 @@ async function refreshStatus() {
     $('#setup-banner').hidden = !status.setup_needed;
     const st = status.station;
     $('#station-chip').textContent = st.callsign ? `${st.callsign} › ${st.tocall}${st.path ? ' via ' + st.path : ' direct'}` : 'no callsign set';
+    $('#station-chip').title = st.callsign ? `Beacons are sent from ${st.callsign} to ${st.tocall}${st.path ? ' via ' + st.path : ' with no digipeater'} (Settings > Station)` : 'No callsign set yet: open Settings';
     $('#sb-version').textContent = `emcomm-objects ${status.version}`;
     $('#sb-mode').textContent = status.install_mode;
     $('#sb-data').textContent = status.data_dir;
+    $('#sb-data').title = `Data folder: config.yaml, the objects file and emcomm-objects.log live here`;
     $('#kill-hint').textContent = `${status.kill_beacon_count} kill packets ${Math.round(status.kill_beacon_interval_seconds)} s apart`;
     if (status.update) applyUpdateState(status.update);
   } catch (e) { toast(`status: ${e.message}`, 'err'); }
@@ -797,8 +813,8 @@ async function refreshStatus() {
 const MAX_FEED = 300;
 function feedItem(when, cls, headNodes, infoText) {
   const li = el('li', { class: cls },
-    el('span', { class: 't' }, fmtTime(when)),
-    el('div', { class: 'body' }, el('div', { class: 'head' }, ...headNodes), infoText ? el('div', { class: 'info' }, infoText) : null));
+    el('span', { class: 't', title: new Date(when || Date.now()).toLocaleString() }, fmtTime(when)),
+    el('div', { class: 'body' }, el('div', { class: 'head' }, ...headNodes), infoText ? el('div', { class: 'info', title: 'APRS info field exactly as transmitted' }, infoText) : null));
   return li;
 }
 function pushFeed(list, li) {
@@ -807,8 +823,8 @@ function pushFeed(list, li) {
 }
 function addPacket(p, when) {
   const li = feedItem(when, p.killed ? 'kill' : 'tx',
-    [el('span', { class: `chip ${p.killed ? 'killp' : 'tx'}` }, p.killed ? 'KILL' : 'TX'), el('span', { class: 'obj' }, p.object),
-      el('span', { class: 'via' }, `${p.source}>${p.dest}${p.path ? ',' + p.path : ''} via ${p.transport}`)],
+    [el('span', { class: `chip ${p.killed ? 'killp' : 'tx'}`, title: p.killed ? 'Kill packet: tells receivers to drop the object' : 'Live object beacon' }, p.killed ? 'KILL' : 'TX'), el('span', { class: 'obj', title: 'Object name' }, p.object),
+      el('span', { class: 'via', title: 'Source > destination, digipeater path, and the transport used' }, `${p.source}>${p.dest}${p.path ? ',' + p.path : ''} via ${p.transport}`)],
     p.info);
   pushFeed($('#packet-list'), li);
   bumpUnread();
@@ -945,17 +961,17 @@ function renderImportPreview() {
     row.ok ? okN++ : badN++;
     if (row.collides) colN++;
     const o = row.object;
-    const box = el('input', { type: 'checkbox' });
+    const box = el('input', { type: 'checkbox', title: 'Include this row in the import' });
     box.checked = row.selected; box.disabled = !row.ok;
     box.addEventListener('change', () => { row.selected = box.checked; updateCommitButton(); });
     let action;
     if (!row.ok) action = el('span', { class: 'muted' }, '—');
     else if (row.collides) {
-      action = el('select', {}, el('option', { value: 'skip' }, 'Skip'), el('option', { value: 'overwrite' }, 'Overwrite'), el('option', { value: 'rename' }, 'Rename (_2)'));
+      action = el('select', { title: 'An object with this name already exists: skip the row, overwrite the existing object, or import under a _2 suffix' }, el('option', { value: 'skip' }, 'Skip'), el('option', { value: 'overwrite' }, 'Overwrite'), el('option', { value: 'rename' }, 'Rename (_2)'));
       action.value = row.action || 'skip';
       action.addEventListener('change', () => { row.action = action.value; });
-    } else action = el('span', { class: 'muted' }, 'create');
-    const statusCell = row.ok ? (row.collides ? el('span', { class: 'chip due' }, 'exists') : el('span', { class: 'chip live' }, 'ready'))
+    } else action = el('span', { class: 'muted', title: 'New object; it will be created disabled' }, 'create');
+    const statusCell = row.ok ? (row.collides ? el('span', { class: 'chip due', title: 'Name already in your list; choose what to do in the last column' }, 'exists') : el('span', { class: 'chip live', title: 'Valid row' }, 'ready'))
       : el('span', { class: 'chip killp', title: row.errors.join('; ') }, 'invalid');
     const nameInput = el('input', { type: 'text', maxlength: 9, class: 'import-name-input', value: o.ObjectName || '', title: 'Edit the on-air name (max 9 characters)' });
     nameInput.addEventListener('change', () => {

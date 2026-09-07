@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 (unreleased)
+
+- Tooltips on every control, field, chip and status element in the UI (hover anything for an explanation).
+
 ## 0.2.0 (2026-09-06)
 
 First release with installers and the in-app updater.
