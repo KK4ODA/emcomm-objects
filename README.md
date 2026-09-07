@@ -10,7 +10,7 @@ from a browser. Objects go on the air through Graywolf, and with Graywolf's iGat
 and aprs.fi. Built for use alongside Graywolf and [VarMap](https://github.com/KK4ODA/VarMap) rather
 than as a full APRS client.
 
-![Emcomm Objects: object cards with live countdowns beside a map of the objects](docs/screenshot.png)
+![Emcomm Objects: the object editor beside the map, dark theme, connected to Graywolf](docs/screenshot.png)
 
 ## What it does
 
