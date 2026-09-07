@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 (unreleased)
+## 0.2.1 (2026-09-06)
 
 - Tooltips on every control, field, chip and status element in the UI (hover anything for an explanation).
 
