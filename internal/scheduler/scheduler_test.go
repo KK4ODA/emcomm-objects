@@ -74,8 +74,8 @@ func (r *recorder) Killed() TransmitFunc {
 		return nil
 	}
 }
-func (r *recorder) LiveCount() int    { r.mu.Lock(); defer r.mu.Unlock(); return len(r.live) }
-func (r *recorder) KilledCount() int  { r.mu.Lock(); defer r.mu.Unlock(); return len(r.killed) }
+func (r *recorder) LiveCount() int   { r.mu.Lock(); defer r.mu.Unlock(); return len(r.live) }
+func (r *recorder) KilledCount() int { r.mu.Lock(); defer r.mu.Unlock(); return len(r.killed) }
 
 // helper: spin up Run for the duration, then cancel
 func runFor(t *testing.T, sch *Scheduler, d time.Duration) {

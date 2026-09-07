@@ -1,41 +1,57 @@
-# emcomm-objects configuration. Copy to config.yaml and edit.
+# emcomm-objects configuration. Copy to config.yaml and edit, or just start
+# the app and fill in Settings in the browser.
 
 station:
-  # Source callsign with SSID for transmitted beacons. Use an SSID distinct
-  # from Graywolf's own station SSID to avoid the iGate's self-echo
-  # suppression. e.g. if Graywolf is N0CALL-1, use N0CALL-12 here.
+  # Source callsign with SSID for every object beacon. Use an SSID that is
+  # NOT Graywolf's own station SSID (e.g. Graywolf is N0CALL-1, use N0CALL-12).
   callsign: "N0CALL-12"
 
-  # AX.25 destination ("tocall"). APZEMC is a safe experimental prefix that
-  # identifies this app in aprs.fi etc. Change only if you have a registered
-  # tocall.
+  # AX.25 destination ("tocall"). APZEMC is an experimental prefix that
+  # identifies this app. Change only if you have a registered tocall.
   tocall: "APZEMC"
 
-  # Digipeater path.
-  #   ""              direct, no digipeater (hyper-local; won't reach aprs.fi
-  #                   unless an iGate is in simplex range of your radio)
-  #   "WIDE1-1"       1 hop (recommended for fixed-location objects)
-  #   "WIDE1-1,WIDE2-1"  2 hops (mobile/tactical; more congestion)
-  path: "WIDE1-1,WIDE2-1"
+  # Default digipeater path. Per-object overrides are set in the UI.
+  #   ""                 direct (no digipeater)
+  #   "WIDE1-1"          1 hop, recommended for fixed objects
+  #   "WIDE1-1,WIDE2-1"  2 hops
+  path: "WIDE1-1"
+
+# How packets reach the radio:
+#   graywolf  Graywolf's REST API (default). Works with a stock Graywolf
+#             install: emcomm-objects logs in like the web UI does and asks
+#             Graywolf to send object beacons. Graywolf handles AX.25, the
+#             channel, digipeating and iGating.
+#   kiss      KISS over TCP. Needs a KISS Interface in Graywolf (type TCP,
+#             mode "modem", listen 127.0.0.1:6700) or any other KISS TNC.
+transport: "graywolf"
+
+graywolf:
+  url: "http://127.0.0.1:8080"
+  username: ""
+  password: ""
+  # Graywolf radio channel id to transmit on. 0 = Graywolf's default.
+  channel: 0
+  # Where Graywolf sends each beacon: "rf", "both" (RF + APRS-IS) or "is_only".
+  send_path: "rf"
 
 kiss:
-  # TCP address of Graywolf's KISS interface.
-  #
-  # In Graywolf's web UI (http://127.0.0.1:8080) you must:
-  #   1. Add a KISS Interface with type=TCP (server / listening)
-  #   2. Operating mode = "modem" (NOT "tnc" — tnc silently drops our frames)
-  #   3. Listen address = 127.0.0.1:6700
-  #   4. Map KISS port 0 to the channel that has the VHF APRS modem
   address: "127.0.0.1:6700"
-
-  # KISS port byte (0-15). Usually 0 unless Graywolf's ChannelMap is set.
+  # KISS port byte (0-15). Usually 0.
   port: 0
 
 storage:
-  # Path to the objects JSON file. Compatible with Pinpoint APRS's
-  # pinpointAprsObjects.json — you can copy yours here.
-  objects_file: "./objects.json"
+  # Objects JSON file. Compatible with Pinpoint APRS's pinpointAprsObjects.json.
+  # A relative path is inside the data directory.
+  objects_file: "objects.json"
 
 web:
   enabled: true
   listen: "127.0.0.1:8765"
+  open_browser: true
+
+updates:
+  # Check GitHub for a newer release at start and every interval_hours.
+  # Only the version number is fetched; nothing about you is sent.
+  check: true
+  interval_hours: 12
+  skip_version: ""

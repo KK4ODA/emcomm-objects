@@ -1,99 +1,116 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestLoad_MinimalValid(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.yaml")
-	yaml := `
-station:
-  callsign: KK4ODA-12
-`
-	if err := os.WriteFile(p, []byte(yaml), 0o644); err != nil {
+func writeTemp(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return p
+}
+
+func TestLoadDefaultsAndValidate(t *testing.T) {
+	p := writeTemp(t, "station:\n  callsign: kk4oda-12\n")
 	cfg, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Defaults kick in.
-	if cfg.Station.Tocall != "APZEMC" {
-		t.Errorf("tocall default: %q", cfg.Station.Tocall)
+	if cfg.Station.Callsign != "KK4ODA-12" {
+		t.Fatalf("callsign not upper-cased: %q", cfg.Station.Callsign)
 	}
-	if cfg.KISS.Address != "127.0.0.1:6700" {
-		t.Errorf("kiss default: %q", cfg.KISS.Address)
+	if cfg.Transport != TransportGraywolf || cfg.Graywolf.URL != "http://127.0.0.1:8080" {
+		t.Fatalf("defaults missing: %+v", cfg)
 	}
-	if cfg.Web.Listen != "127.0.0.1:8765" {
-		t.Errorf("web default: %q", cfg.Web.Listen)
-	}
-}
-
-func TestLoad_UnknownField(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(p, []byte("station:\n  callsign: KK4ODA-12\n  pizza: pepperoni\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "pizza") {
-		t.Errorf("expected unknown-field error mentioning 'pizza', got: %v", err)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
 	}
 }
 
-func TestLoad_MissingCallsign(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(p, []byte("kiss:\n  address: 127.0.0.1:6700\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(p); err == nil {
-		t.Error("expected error for missing callsign")
-	}
-}
-
-func TestLoad_BadCallsign(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(p, []byte("station:\n  callsign: KK4ODA-99\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(p); err == nil {
-		t.Error("expected error for SSID 99")
-	}
-}
-
-func TestLoad_BadKissPort(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(p, []byte("station:\n  callsign: KK4ODA-12\nkiss:\n  port: 99\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(p); err == nil {
-		t.Error("expected error for kiss port 99")
-	}
-}
-
-func TestWriteExample(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "ex.yaml")
-	if err := WriteExample(p); err != nil {
-		t.Fatal(err)
-	}
-	// The example should fail validation (callsign is a placeholder) — but
-	// it should at least PARSE as valid YAML with no unknown fields.
-	data, err := os.ReadFile(p)
+func TestLoadEmptyFileIsDefaults(t *testing.T) {
+	cfg, err := Load(writeTemp(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "KK4ODA-12") {
-		t.Errorf("example missing expected content")
+	if cfg.Web.Listen != "127.0.0.1:8765" {
+		t.Fatalf("defaults not applied: %+v", cfg)
 	}
-	// And it should load and validate (KK4ODA-12 is a valid format).
-	if _, err := Load(p); err != nil {
-		t.Errorf("example doesn't load cleanly: %v", err)
+}
+
+func TestLoadMissingFile(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "nope.yaml"))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected ErrNotExist, got %v", err)
+	}
+	if !cfg.SetupNeeded() {
+		t.Fatal("default config must need setup")
+	}
+}
+
+func TestLoadRejectsUnknownField(t *testing.T) {
+	p := writeTemp(t, "station:\n  callsign: X1Y\n  bogus: 1\n")
+	if _, err := Load(p); err == nil {
+		t.Fatal("unknown field should fail")
+	}
+}
+
+func TestExampleParsesAndValidates(t *testing.T) {
+	cfg, err := Load(writeTemp(t, ExampleYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("example must validate: %v", err)
+	}
+}
+
+func TestValidateErrors(t *testing.T) {
+	base := Default()
+	base.Station.Callsign = "KK4ODA-12"
+	cases := map[string]func(*Config){
+		"bad ssid":      func(c *Config) { c.Station.Callsign = "KK4ODA-16" },
+		"bad path":      func(c *Config) { c.Station.Path = "WIDE1-1,,X" },
+		"bad transport": func(c *Config) { c.Transport = "carrier-pigeon" },
+		"bad send_path": func(c *Config) { c.Graywolf.SendPath = "sometimes" },
+		"bad gw url":    func(c *Config) { c.Graywolf.URL = "ftp://x" },
+		"bad kiss":      func(c *Config) { c.Transport = TransportKISS; c.KISS.Address = "nohost" },
+		"bad kiss port": func(c *Config) { c.Transport = TransportKISS; c.KISS.Port = 16 },
+		"bad listen":    func(c *Config) { c.Web.Listen = "127.0.0.1:99999" },
+	}
+	for name, mut := range cases {
+		c := base
+		mut(&c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+}
+
+func TestSaveRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sub", "config.yaml")
+	c := Default()
+	c.Station.Callsign = "kk4oda-12"
+	c.Graywolf.Password = "hunter2"
+	c.Transport = TransportKISS
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Station.Callsign != "KK4ODA-12" || back.Graywolf.Password != "hunter2" || back.Transport != TransportKISS {
+		t.Fatalf("round trip lost data: %+v", back)
+	}
+	data, _ := os.ReadFile(p)
+	if !strings.HasPrefix(string(data), "# emcomm-objects configuration") {
+		t.Fatal("header missing")
 	}
 }

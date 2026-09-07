@@ -1,34 +1,28 @@
-# Binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-/emcomm-objects
-/emcomm-objects.exe
+# Build output
 /dist/
 /build/
-
-# Go
+/emcomm-objects
+/emcomm-objects.exe
+*.exe
+*.syso
 *.test
 *.out
 *.prof
 vendor/
 
-# Editor
+# Editors / tooling
 .vscode/
 .idea/
 *.swp
 *~
-
-# Claude Code / preview-tool local config (user-specific paths)
 .claude/
 
-# Local config and runtime state
+# Local config and runtime state (kept beside the exe for portable/source runs)
 config.yaml
 config.local.yaml
 objects.json
+*.log
 *.db
 *.db-shm
 *.db-wal
-*.log
+/updates/

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -74,14 +73,14 @@ const (
 type Object struct {
 	ObjectName      string    `json:"ObjectName"`
 	ShowTooltip     bool      `json:"ShowTooltip"`
-	SymbolTable     string    `json:"SymbolTable"`     // single char, e.g. "/"
-	SymbolID        string    `json:"SymbolID"`        // single char, e.g. "r"
+	SymbolTable     string    `json:"SymbolTable"` // single char, e.g. "/"
+	SymbolID        string    `json:"SymbolID"`    // single char, e.g. "r"
 	Comment         string    `json:"Comment"`
 	IntervalMinutes int       `json:"IntervalMinutes"` // 0 disables auto-beacon
 	Latitude        float64   `json:"Latitude"`
 	Longitude       float64   `json:"Longitude"`
-	Altitude        float64   `json:"Altitude"`        // feet
-	LastBeacon      LooseTime `json:"LastBeacon"`      // zero = never
+	Altitude        float64   `json:"Altitude"`   // feet
+	LastBeacon      LooseTime `json:"LastBeacon"` // zero = never
 
 	// emcomm-objects additions (ignored by Pinpoint):
 	Enabled bool   `json:"Enabled"`
@@ -160,7 +159,21 @@ type Store struct {
 
 	mu      sync.RWMutex
 	objects []Object
+
+	// onSave, when set, runs after every successful Save (the web UI uses
+	// it to push an "objects changed" event to browsers).
+	onSave func()
 }
+
+// SetOnSave registers a callback invoked after each successful Save.
+func (s *Store) SetOnSave(fn func()) {
+	s.mu.Lock()
+	s.onSave = fn
+	s.mu.Unlock()
+}
+
+// Path returns the file the store persists to.
+func (s *Store) Path() string { return s.path }
 
 // New constructs an empty Store. Use Load to populate from disk.
 func New(path string) *Store { return &Store{path: path} }
@@ -186,19 +199,11 @@ func (s *Store) Load() error {
 		s.mu.Unlock()
 		return nil
 	}
+	// Lenient decode: Pinpoint (or a newer emcomm-objects) may add fields
+	// we do not model; they are dropped on the next Save, which is fine.
 	var raw []Object
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	dec.DisallowUnknownFields() // safe: we model all Pinpoint fields
-	// Re-enable lenient mode on retry — Pinpoint may add fields later.
-	if err := dec.Decode(&raw); err != nil {
-		// Fall back to lenient decode.
-		raw = raw[:0]
-		if err2 := json.Unmarshal(data, &raw); err2 != nil {
-			return fmt.Errorf("parse %s: %w", s.path, err2)
-		}
-	}
-	if err := dec.Decode(new(any)); err != nil && err != io.EOF {
-		// Trailing garbage after JSON array. Tolerate.
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse %s: %w", s.path, err)
 	}
 	s.mu.Lock()
 	s.objects = raw
@@ -239,6 +244,12 @@ func (s *Store) Save() error {
 	if err := os.Rename(tmpName, s.path); err != nil {
 		os.Remove(tmpName)
 		return fmt.Errorf("rename: %w", err)
+	}
+	s.mu.RLock()
+	cb := s.onSave
+	s.mu.RUnlock()
+	if cb != nil {
+		cb()
 	}
 	return nil
 }
@@ -408,5 +419,4 @@ var (
 	ErrAlreadyKilled = errors.New("object already killed")
 	ErrNotKilled     = errors.New("object is not killed; nothing to revive")
 	ErrNeverBeaconed = errors.New("object was never live-beaconed; refusing to send kill (would create a ghost)")
-	ErrNoKillBeacons = errors.New("object has no remaining kill beacons")
 )

@@ -4,7 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kk4oda/emcomm-objects/internal/kiss"
+	"github.com/kk4oda/emcomm-objects/internal/link"
+	"github.com/kk4oda/emcomm-objects/internal/logbuf"
 	"github.com/kk4oda/emcomm-objects/internal/transmit"
 )
 
@@ -12,9 +13,12 @@ import (
 type EventType string
 
 const (
-	EventPacket EventType = "packet"
-	EventState  EventType = "state"
-	EventLog    EventType = "log"
+	EventPacket  EventType = "packet"  // a beacon went out
+	EventState   EventType = "state"   // transport connection state changed
+	EventLog     EventType = "log"     // a server log line
+	EventObjects EventType = "objects" // the object list changed; reload it
+	EventConfig  EventType = "config"  // settings changed
+	EventUpdate  EventType = "update"  // update state changed
 )
 
 // Event is what each SSE subscriber receives.
@@ -22,63 +26,46 @@ type Event struct {
 	Type EventType `json:"type"`
 	When time.Time `json:"when"`
 
-	// Set for type=packet:
-	Packet *PacketSummary `json:"packet,omitempty"`
-
-	// Set for type=state:
-	KISSState string `json:"kiss_state,omitempty"`
-
-	// Set for type=log:
-	Level   string `json:"level,omitempty"`
-	Message string `json:"message,omitempty"`
+	Packet *PacketSummary `json:"packet,omitempty"` // type=packet
+	State  *link.State    `json:"state,omitempty"`  // type=state
+	Log    *logbuf.Entry  `json:"log,omitempty"`    // type=log
 }
 
-// PacketSummary is the public shape of a transmitted packet for the UI.
+// PacketSummary is the public shape of a transmitted packet.
 type PacketSummary struct {
-	Object   string `json:"object"`
-	Killed   bool   `json:"killed"` // true = kill packet ('_' indicator), false = live ('*')
-	Source   string `json:"source"`
-	Dest     string `json:"dest"`
-	Path     string `json:"path"`
-	Info     string `json:"info"`
-	NumBytes int    `json:"num_bytes"`
+	Object    string `json:"object"`
+	Killed    bool   `json:"killed"`
+	Transport string `json:"transport"`
+	Source    string `json:"source"`
+	Dest      string `json:"dest"`
+	Path      string `json:"path"`
+	Info      string `json:"info"`
 }
 
-// Broker fans out events to all active SSE subscribers.
+// Broker fans out events to all active SSE subscribers and keeps a bounded
+// ring of recent packet/state events for the Activity tab's history.
 type Broker struct {
-	mu         sync.RWMutex
-	subs       map[chan Event]struct{}
-	recent     []Event // bounded ring of recent events for new subscribers
-	maxRecent  int
-	recentHead int // next write index when wrapped
+	mu        sync.RWMutex
+	subs      map[chan Event]struct{}
+	recent    []Event
+	maxRecent int
+	head      int
+	full      bool
 }
 
-// NewBroker creates a broker that keeps the last `maxRecent` events for
-// replay to new subscribers.
+// NewBroker creates a broker keeping the last maxRecent packet/state events.
 func NewBroker(maxRecent int) *Broker {
-	if maxRecent < 0 {
-		maxRecent = 0
+	if maxRecent < 1 {
+		maxRecent = 1
 	}
-	return &Broker{
-		subs:      make(map[chan Event]struct{}),
-		recent:    make([]Event, 0, maxRecent),
-		maxRecent: maxRecent,
-	}
+	return &Broker{subs: make(map[chan Event]struct{}), recent: make([]Event, maxRecent), maxRecent: maxRecent}
 }
 
-// Subscribe returns a channel that receives all future events plus the
-// recent backlog. Caller must Unsubscribe when done.
+// Subscribe returns a channel that receives all future events. The caller
+// must Unsubscribe when done.
 func (b *Broker) Subscribe() chan Event {
-	ch := make(chan Event, 32)
+	ch := make(chan Event, 64)
 	b.mu.Lock()
-	// Replay recent events in chronological order.
-	for _, e := range b.snapshotLocked() {
-		select {
-		case ch <- e:
-		default:
-			// Subscriber buffer too small; drop replay.
-		}
-	}
 	b.subs[ch] = struct{}{}
 	b.mu.Unlock()
 	return ch
@@ -94,14 +81,21 @@ func (b *Broker) Unsubscribe(ch chan Event) {
 	b.mu.Unlock()
 }
 
-// Publish sends an event to all subscribers (non-blocking) and stores it
-// in the recent ring.
+// Publish sends an event to all subscribers (non-blocking; a slow browser
+// drops events rather than stalling the server) and remembers packet and
+// state events.
 func (b *Broker) Publish(e Event) {
 	if e.When.IsZero() {
 		e.When = time.Now().UTC()
 	}
 	b.mu.Lock()
-	b.appendRecentLocked(e)
+	if e.Type == EventPacket || e.Type == EventState {
+		b.recent[b.head] = e
+		b.head = (b.head + 1) % b.maxRecent
+		if b.head == 0 {
+			b.full = true
+		}
+	}
 	subs := make([]chan Event, 0, len(b.subs))
 	for ch := range b.subs {
 		subs = append(subs, ch)
@@ -111,76 +105,58 @@ func (b *Broker) Publish(e Event) {
 		select {
 		case ch <- e:
 		default:
-			// Slow subscriber — drop this event for them.
 		}
 	}
 }
 
-func (b *Broker) appendRecentLocked(e Event) {
-	if b.maxRecent == 0 {
-		return
-	}
-	if len(b.recent) < b.maxRecent {
-		b.recent = append(b.recent, e)
-		return
-	}
-	b.recent[b.recentHead] = e
-	b.recentHead = (b.recentHead + 1) % b.maxRecent
-}
-
-func (b *Broker) snapshotLocked() []Event {
-	if b.maxRecent == 0 || len(b.recent) == 0 {
-		return nil
-	}
-	if len(b.recent) < b.maxRecent {
-		// Not yet wrapped.
-		out := make([]Event, len(b.recent))
-		copy(out, b.recent)
+// RecentEvents returns remembered events, oldest first.
+func (b *Broker) RecentEvents() []Event {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if !b.full {
+		out := make([]Event, b.head)
+		copy(out, b.recent[:b.head])
 		return out
 	}
 	out := make([]Event, b.maxRecent)
-	for i := 0; i < b.maxRecent; i++ {
-		out[i] = b.recent[(b.recentHead+i)%b.maxRecent]
+	for i := range out {
+		out[i] = b.recent[(b.head+i)%b.maxRecent]
 	}
 	return out
 }
 
-// RecentEvents returns a snapshot of the most recent events, oldest first.
-func (b *Broker) RecentEvents() []Event {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.snapshotLocked()
-}
-
-// PacketHook returns a function suitable as transmit.Sender.OnPacket.
+// PacketHook returns a transmit.Sender.OnPacket callback.
 func (b *Broker) PacketHook() func(transmit.PacketEvent) {
 	return func(pe transmit.PacketEvent) {
-		pathStr := ""
+		path := ""
 		for i, p := range pe.Path {
 			if i > 0 {
-				pathStr += ","
+				path += ","
 			}
-			pathStr += p.String()
+			path += p.String()
 		}
-		b.Publish(Event{
-			Type: EventPacket,
-			When: pe.When,
-			Packet: &PacketSummary{
-				Object:   pe.Object,
-				Killed:   pe.Killed,
-				Source:   pe.Source.String(),
-				Dest:     pe.Dest.String(),
-				Path:     pathStr,
-				Info:     pe.Info,
-				NumBytes: pe.NumBytes,
-			},
-		})
+		b.Publish(Event{Type: EventPacket, When: pe.When, Packet: &PacketSummary{
+			Object: pe.Object, Killed: pe.Killed, Transport: pe.Transport,
+			Source: pe.Source.String(), Dest: pe.Dest.String(), Path: path, Info: pe.Info,
+		}})
 	}
 }
 
-// KISSStateHook returns a function suitable as kiss.Client onState callback.
-func (b *Broker) KISSStateHook() func(kiss.State) {
-	return func(s kiss.State) {
-		b.Publish(Event{Type: EventState, KISSState: s.String()})
+// StateHook returns a transport onState callback.
+func (b *Broker) StateHook() func(link.State) {
+	return func(s link.State) {
+		st := s
+		b.Publish(Event{Type: EventState, State: &st})
 	}
 }
+
+// LogHook returns a logbuf notify callback.
+func (b *Broker) LogHook() func(logbuf.Entry) {
+	return func(e logbuf.Entry) {
+		entry := e
+		b.Publish(Event{Type: EventLog, When: e.When, Log: &entry})
+	}
+}
+
+// Notify publishes a bare event of the given type.
+func (b *Broker) Notify(t EventType) { b.Publish(Event{Type: t}) }

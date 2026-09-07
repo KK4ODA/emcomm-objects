@@ -1,42 +1,125 @@
 name: Release
 
-# Triggers on any tag matching v* (e.g. v0.1.0, v1.2.3-beta.1).
-# Build artifacts and the GitHub Release are produced by goreleaser
-# per .goreleaser.yaml.
-
+# Push a tag like v0.2.0 (release.bat does this) and this workflow builds
+# packages for every platform and publishes them on the Releases page:
+#   EmcommObjects-Setup-<ver>.exe                    Windows installer (per-user, Inno Setup)
+#   emcomm-objects-<ver>-windows-x64-portable.zip    Windows, no installer
+#   emcomm-objects-<ver>-macos-arm64.tar.gz          Apple Silicon
+#   emcomm-objects-<ver>-macos-x64.tar.gz            Intel Mac
+#   emcomm-objects-<ver>-linux-x64.tar.gz
+#   emcomm-objects-<ver>-linux-arm64.tar.gz          Raspberry Pi 4/5 (64-bit OS)
+#   SHA256SUMS.txt                                   verified by the in-app updater
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ["v*"]
 
 permissions:
-  contents: write # to create the release and upload assets
+  contents: write
+
+env:
+  GO_VERSION: "1.26"
 
 jobs:
-  release:
-    name: Release ${{ github.ref_name }}
+  test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (with full history)
-        uses: actions/checkout@v4
-        with:
-          # goreleaser uses git history for changelog generation.
-          fetch-depth: 0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache: true }
+      - run: go vet ./...
+      - run: go test ./...
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: stable
-          cache: true
+  unix:
+    name: build (macOS + Linux)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache: true }
+      - name: Cross-compile and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"
+          MOD=github.com/kk4oda/emcomm-objects/internal/version
+          LD="-s -w -X $MOD.Version=$VER -X $MOD.Commit=${GITHUB_SHA::8} -X $MOD.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist
+          for t in macos-arm64:darwin:arm64 macos-x64:darwin:amd64 linux-x64:linux:amd64 linux-arm64:linux:arm64; do
+            IFS=: read -r name goos goarch <<< "$t"
+            dir="dist/emcomm-objects-$VER-$name"
+            mkdir -p "$dir"
+            CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "$LD" -o "$dir/emcomm-objects" ./cmd/emcomm-objects
+            cp README.md LICENSE config.example.yaml "$dir/"
+            cp internal/web/ui/symbols/COPYRIGHT.md "$dir/SYMBOLS-COPYRIGHT.md"
+            cat > "$dir/README-FIRST.txt" <<EOF
+          Emcomm Objects $VER ($name)
+          Run ./emcomm-objects from a terminal; it opens http://127.0.0.1:8765 in your browser
+          (add --no-browser to skip that). Settings and objects are kept next to the executable.
+          macOS: the binary is not code-signed; on first run use right-click > Open, or run
+                 xattr -d com.apple.quarantine emcomm-objects
+          EOF
+            tar -czf "dist/emcomm-objects-$VER-$name.tar.gz" -C dist "emcomm-objects-$VER-$name"
+            rm -rf "$dir"
+          done
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with: { name: unix, path: dist/*.tar.gz, if-no-files-found: error }
 
-      - name: Run tests
-        run: go test ./...
-
-      - name: Run goreleaser
-        uses: goreleaser/goreleaser-action@v6
+  windows:
+    name: build (Windows installer + portable)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache: true }
+      - name: Build, zip and make the installer
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart("v")
+          .\packaging\build.ps1 -Version $ver -Targets windows-x64
+      - uses: actions/upload-artifact@v4
         with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*.exe
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: [unix, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts, merge-multiple: true }
+      - name: Checksums
+        run: cd artifacts && rm -f SHA256SUMS.txt && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Release notes from CHANGELOG.md
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VER" '
+            /^## / { if (found) exit; if ($2 == ver) { found=1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "(no CHANGELOG entry for $VER)" > notes.md; fi
+          cat >> notes.md <<'EOF'
+
+          ---
+          **Windows:** download `EmcommObjects-Setup-*.exe` and run it (per-user install, no admin needed). Prefer no installer? `emcomm-objects-*-windows-x64-portable.zip` unzips anywhere.
+
+          **macOS / Linux / Raspberry Pi:** unpack the matching `.tar.gz`, run `./emcomm-objects`, open http://127.0.0.1:8765.
+
+          Settings and objects are kept in the user profile (`%LOCALAPPDATA%\EmcommObjects` on Windows for the installed build) and survive upgrades.
+
+          **Already running Emcomm Objects?** It checks for new releases by itself: click the *Update* pill and choose *Install now* (Windows), or download from here. `SHA256SUMS.txt` lists the checksum of every file above.
+          EOF
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Emcomm Objects ${{ github.ref_name }}
+          body_path: notes.md
+          files: artifacts/*
+          prerelease: ${{ contains(github.ref_name, '-') }}

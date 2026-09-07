@@ -1,195 +1,368 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>emcomm-objects</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-  <link rel="stylesheet" href="style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emcomm Objects</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Apply the saved theme before first paint to avoid a flash.
+  try { var t = localStorage.getItem('eo_theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 </head>
 <body>
-<header>
-  <h1>emcomm-objects</h1>
-  <div class="status">
-    <span class="badge" id="kiss-badge" data-state="disconnected">KISS: disconnected</span>
-    <span id="station-info" class="muted"></span>
+
+<header id="topbar">
+  <div class="brand" title="Emcomm Objects: APRS objects via Graywolf">
+    <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 20h18L12 2zm0 5.5 5.2 10.5H6.8L12 7.5z"/><circle cx="12" cy="15" r="1.6"/></svg>
+    <span>Emcomm <b>Objects</b></span>
   </div>
+  <div id="station-chip" class="chip-station" title="Source callsign › tocall via default path">—</div>
+  <div class="spacer"></div>
+  <button id="update-pill" class="pill pill-update" hidden title="A newer release is available">Update</button>
+  <div id="link-pill" class="pill off" title="Transport state"><i class="dot"></i><span id="link-text">starting…</span></div>
+  <button id="beacon-all-btn" class="btn ghost" title="Send every enabled live object right now">Beacon all</button>
+  <button id="theme-btn" class="btn icon" title="Toggle light / dark theme" aria-label="Toggle theme">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c0-.5 0-1-.1-1.4A7 7 0 0 1 12.4 3.1c-.1 0-.3 0-.4-.1z"/></svg>
+  </button>
+  <button id="settings-btn" class="btn icon" title="Settings" aria-label="Settings">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6a.5.5 0 0 0 .1-.7l-2-3.4a.5.5 0 0 0-.6-.2l-2.5 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 0-.5.5l-.4 2.6c-.6.3-1.2.6-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.4a.5.5 0 0 0 .1.7L4.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.7l2 3.4c.1.2.4.3.6.2l2.5-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .3.2.5.5.5h4c.3 0 .5-.2.5-.5l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.4a.5.5 0 0 0-.1-.7L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
+  </button>
 </header>
 
+<div id="setup-banner" class="banner" hidden>
+  <div>
+    <b>Welcome.</b> Enter your callsign and how to reach your radio (Graywolf login or KISS TNC) to start beaconing objects.
+  </div>
+  <button class="btn primary" id="setup-open-btn">Open Settings</button>
+</div>
+
 <main>
-  <section id="map-pane" class="pane">
+  <section id="map-pane">
     <div id="map"></div>
+    <div id="map-hint" class="map-hint" hidden>Click the map to place the object · <a href="#" id="map-hint-cancel">cancel</a></div>
   </section>
 
-  <section id="control-pane" class="pane">
-    <div class="tabs">
-      <button class="tab active" data-tab="objects">Objects</button>
-      <button class="tab" data-tab="add">Add / Edit</button>
-      <button class="tab" data-tab="import">Import CSV</button>
-      <button class="tab" data-tab="log">Activity</button>
-    </div>
+  <aside id="sidebar">
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="objects" role="tab">Objects <span id="obj-count" class="count"></span></button>
+      <button class="tab" data-tab="form" role="tab" id="tab-form">New</button>
+      <button class="tab" data-tab="import" role="tab">Import</button>
+      <button class="tab" data-tab="activity" role="tab">Activity <span id="act-badge" class="count" hidden></span></button>
+    </nav>
 
-    <div class="tab-panel active" data-tab-panel="objects">
+    <!-- Objects -->
+    <section class="panel active" data-panel="objects">
       <div class="toolbar">
-        <button id="reload-btn">Reload</button>
-        <span class="grow"></span>
-        <button id="beacon-due-btn" title="Manually trigger any object whose interval has elapsed">Beacon due now</button>
+        <input id="obj-search" type="search" placeholder="Filter by name or comment" autocomplete="off">
+        <select id="obj-filter" title="Show">
+          <option value="all">All</option>
+          <option value="live">Live</option>
+          <option value="disabled">Disabled</option>
+          <option value="killed">Killed</option>
+        </select>
       </div>
-      <table id="objects-table">
-        <thead><tr>
-          <th>Name</th>
-          <th>Sym</th>
-          <th>Lat</th>
-          <th>Lon</th>
-          <th>Interval</th>
-          <th>Last beacon</th>
-          <th>Status</th>
-          <th></th>
-        </tr></thead>
-        <tbody id="objects-tbody"></tbody>
-      </table>
-      <p id="empty-msg" class="muted" hidden>No objects yet. Use the Add tab to create one, or copy your <code>pinpointAprsObjects.json</code> to the <code>objects_file</code> path.</p>
-    </div>
+      <div id="obj-list" class="list"></div>
+      <div id="obj-empty" class="empty" hidden>
+        <p><b>No objects yet.</b></p>
+        <p>Create one with <b>New</b>, import a CSV, or copy a Pinpoint <code>pinpointAprsObjects.json</code> to the objects file.</p>
+      </div>
+    </section>
 
-    <div class="tab-panel" data-tab-panel="add">
-      <form id="object-form">
+    <!-- New / Edit -->
+    <section class="panel" data-panel="form">
+      <form id="object-form" autocomplete="off">
         <input type="hidden" id="f-original-name">
-        <div class="row">
-          <label>Name (max 9)
-            <input type="text" id="f-name" maxlength="9" required pattern="[ -~]+">
+        <h2 id="form-title">New object</h2>
+
+        <div class="grid-2">
+          <label>Name <small>1–9 chars, on the air</small>
+            <input type="text" id="f-name" maxlength="9" required pattern="[ -~]+" spellcheck="false" class="mono">
           </label>
-          <label>Interval (min)
+          <label>Interval <small>minutes, 0 = manual</small>
             <input type="number" id="f-interval" min="0" max="1440" value="30" required>
           </label>
         </div>
-        <div class="row">
-          <label>Latitude
-            <input type="number" id="f-lat" step="any" min="-90" max="90" required>
-          </label>
-          <label>Longitude
-            <input type="number" id="f-lon" step="any" min="-180" max="180" required>
-          </label>
-          <button type="button" id="f-pick-btn" title="Click on the map to set lat/lon">Pick on map</button>
-        </div>
-        <div class="row sym-row">
-          <label>Symbol
-            <div id="f-sym-display" class="sym-display" title="Click to pick from chart">
+
+        <fieldset>
+          <legend>Position</legend>
+          <div class="grid-2">
+            <label>Latitude <input type="number" id="f-lat" step="any" min="-90" max="90" required placeholder="33.7490"></label>
+            <label>Longitude <input type="number" id="f-lon" step="any" min="-180" max="180" required placeholder="-84.3880"></label>
+          </div>
+          <div class="row">
+            <button type="button" class="btn" id="f-pick-btn">Pick on map</button>
+            <label class="inline">Altitude (ft) <input type="number" id="f-alt" min="0" max="999999" step="1" placeholder="0"></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Symbol</legend>
+          <div class="sym-row">
+            <button type="button" id="f-sym-pick" class="sym-display" title="Choose from the symbol chart">
               <span id="f-sym-preview" class="sym-sprite"></span>
+              <span id="f-sym-name">Antenna</span>
               <code id="f-sym-code">/r</code>
-              <button type="button" id="f-sym-pick">Pick…</button>
-            </div>
-            <input type="hidden" id="f-table" value="/">
-            <input type="hidden" id="f-sym" value="r">
-          </label>
-          <span class="hint">Click <strong>Pick</strong> to choose from the visual chart, or type a code below to override.</span>
-        </div>
-        <div class="row">
-          <label>Symbol code (advanced)
-            <input type="text" id="f-sym-manual" maxlength="2" placeholder="/r" style="font-family: ui-monospace, monospace; width: 5em;">
-          </label>
-          <span class="hint">2 chars: table (<code>/</code> or <code>\</code>) + symbol char.</span>
-        </div>
-        <label>Comment
-          <input type="text" id="f-comment" maxlength="64">
+            </button>
+            <label class="inline">Code
+              <input type="text" id="f-sym-manual" maxlength="2" class="mono" placeholder="/r" title="Type a 2-character symbol code: table (/ or \) + symbol">
+            </label>
+          </div>
+          <input type="hidden" id="f-table" value="/">
+          <input type="hidden" id="f-sym" value="r">
+        </fieldset>
+
+        <label>Comment <small>free text after the symbol, keep it short</small>
+          <input type="text" id="f-comment" maxlength="43">
         </label>
-        <label>Digipeater path
-          <select id="f-path-preset">
-            <option value="" selected>(use station default)</option>
-            <option value="-">(direct — no digipeater)</option>
-            <option value="WIDE1-1">WIDE1-1 (1 hop, fixed/local — recommended for objects)</option>
-            <option value="WIDE1-1,WIDE2-1">WIDE1-1,WIDE2-1 (2 hops, mobile/tactical)</option>
-            <option value="WIDE2-1">WIDE2-1 (1 wide hop, skip fill-in)</option>
-            <option value="WIDE2-2">WIDE2-2 (2 wide hops — legacy, may be filtered)</option>
-            <option value="__custom__">Custom…</option>
-          </select>
-        </label>
+
+        <div class="grid-2">
+          <label>Digipeater path
+            <select id="f-path-preset">
+              <option value="">Station default</option>
+              <option value="-">Direct (no digipeater)</option>
+              <option value="WIDE1-1">WIDE1-1 · 1 hop</option>
+              <option value="WIDE1-1,WIDE2-1">WIDE1-1,WIDE2-1 · 2 hops</option>
+              <option value="WIDE2-1">WIDE2-1</option>
+              <option value="WIDE2-2">WIDE2-2</option>
+              <option value="__custom__">Custom…</option>
+            </select>
+          </label>
+          <label>Expires <small>local time, optional</small>
+            <input type="datetime-local" id="f-expires">
+          </label>
+        </div>
         <label id="f-path-custom-wrap" hidden>Custom path
-          <input type="text" id="f-path-custom" placeholder="e.g. RELAY,WIDE1-1">
+          <input type="text" id="f-path-custom" class="mono" placeholder="e.g. RELAY,WIDE1-1">
         </label>
-        <label>Expires (local time, optional)
-          <input type="datetime-local" id="f-expires">
-          <span class="hint">When this time passes, the object is automatically killed (3 kill packets sent, then it stops beaconing). Leave blank for no auto-expiry.</span>
+        <p class="hint">An expired object is killed automatically: <span id="kill-hint">3 kill packets 35 s apart</span>, then it stops beaconing.</p>
+
+        <label class="switch">
+          <input type="checkbox" id="f-enabled" checked>
+          <span class="track"></span>
+          <span>Enabled · beacon automatically on the interval</span>
         </label>
-        <div class="row">
-          <label class="checkbox">
-            <input type="checkbox" id="f-enabled" checked> Enabled (auto-beacon on interval)
-          </label>
-        </div>
+
         <div class="form-actions">
-          <button type="submit" id="f-save">Save</button>
-          <button type="button" id="f-cancel">Cancel</button>
-          <button type="button" id="f-delete" class="danger" hidden>Delete</button>
+          <button type="submit" class="btn primary" id="f-save">Save</button>
+          <button type="button" class="btn" id="f-cancel">Cancel</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn danger ghost" id="f-delete" hidden>Delete</button>
         </div>
         <p id="form-error" class="error" hidden></p>
       </form>
-    </div>
+    </section>
 
-    <div class="tab-panel" data-tab-panel="import">
-      <div id="import-intro">
-        <p>Import APRS objects from a CSV file. Expected columns (header row required):</p>
-        <pre><code>ObjectName,Latitude,Longitude,SymbolTable,SymbolID,Comment,IntervalMinutes</code></pre>
-        <p class="hint"><code>SymbolTable</code>, <code>SymbolID</code>, <code>Comment</code>, and <code>IntervalMinutes</code> are optional (defaults: <code>/</code>, <code>r</code>, blank, <code>30</code>). Imported objects start <strong>disabled</strong> so nothing auto-beacons; enable each one explicitly after review.
-          <a href="#" id="import-template-link">Download template</a></p>
-      </div>
+    <!-- Import -->
+    <section class="panel" data-panel="import">
+      <h2>Import objects from CSV</h2>
+      <p class="hint">Header row required. Columns: <code>ObjectName, Latitude, Longitude</code> plus optional
+        <code>SymbolTable, SymbolID, Comment, IntervalMinutes</code>. Long names are shortened to 9 characters
+        automatically. Imported objects start <b>disabled</b>, so nothing goes on the air until you enable it.
+        <a href="#" id="import-template-link">Download template</a> · <a href="/api/objects.csv">Export current objects</a></p>
       <div class="row">
-        <label>Upload CSV file
-          <input type="file" id="import-file" accept=".csv,text/csv">
-        </label>
-        <span class="hint">or paste below ↓</span>
+        <input type="file" id="import-file" accept=".csv,text/csv">
       </div>
-      <label>Paste CSV
-        <textarea id="import-text" rows="6" placeholder="ObjectName,Latitude,Longitude,SymbolTable,SymbolID,Comment,IntervalMinutes&#10;DCFR_3,33.79,-84.32,/,r,DCFR Station 3,30"></textarea>
-      </label>
+      <textarea id="import-text" rows="5" class="mono" placeholder="ObjectName,Latitude,Longitude,SymbolTable,SymbolID,Comment,IntervalMinutes&#10;SHELTER1,33.81,-84.34,/,h,Red Cross Shelter,15"></textarea>
       <div class="form-actions">
-        <button type="button" id="import-parse">Parse / Preview</button>
-        <button type="button" id="import-commit" class="primary" disabled>Import selected rows</button>
-        <button type="button" id="import-cancel" class="secondary">Clear</button>
+        <button type="button" class="btn" id="import-parse">Preview</button>
+        <button type="button" class="btn primary" id="import-commit" disabled>Import</button>
+        <button type="button" class="btn ghost" id="import-cancel">Clear</button>
       </div>
       <p id="import-error" class="error" hidden></p>
       <div id="import-preview-wrap" hidden>
         <p class="hint" id="import-summary"></p>
+        <div class="table-wrap">
         <table id="import-preview">
           <thead><tr>
             <th><input type="checkbox" id="import-select-all" checked></th>
-            <th>Name</th>
-            <th>Lat</th>
-            <th>Lon</th>
-            <th>Sym</th>
-            <th>Interval</th>
-            <th>Comment</th>
-            <th>Status</th>
-            <th>If exists</th>
+            <th>Name</th><th>Sym</th><th>Lat</th><th>Lon</th><th>Every</th><th>Comment</th><th>Status</th><th>If exists</th>
           </tr></thead>
           <tbody id="import-preview-tbody"></tbody>
         </table>
+        </div>
       </div>
-    </div>
+    </section>
 
-    <div class="tab-panel" data-tab-panel="log">
-      <ol id="log-list"></ol>
-    </div>
-  </section>
+    <!-- Activity -->
+    <section class="panel" data-panel="activity">
+      <div class="toolbar">
+        <div class="seg" role="tablist">
+          <button class="active" data-act="packets">Packets</button>
+          <button data-act="log">Log</button>
+        </div>
+        <span class="spacer"></span>
+        <button class="btn ghost small" id="act-clear">Clear</button>
+      </div>
+      <ol id="packet-list" class="feed"></ol>
+      <ol id="log-list" class="feed" hidden></ol>
+    </section>
+  </aside>
 </main>
 
+<footer id="statusbar">
+  <span id="sb-version">emcomm-objects</span>
+  <span id="sb-mode" class="muted"></span>
+  <span class="spacer"></span>
+  <span id="sb-data" class="muted" title="Data directory"></span>
+  <a href="https://github.com/KK4ODA/emcomm-objects" target="_blank" rel="noopener">GitHub</a>
+</footer>
+
+<!-- Symbol picker -->
 <div id="sym-modal" class="modal" hidden>
-  <div class="modal-content">
-    <div class="modal-header">
-      <h2>Pick APRS symbol</h2>
-      <button type="button" class="modal-close" aria-label="Close">×</button>
-    </div>
+  <div class="modal-card wide">
+    <div class="modal-head"><h2>Choose a symbol</h2><button class="btn icon modal-close" aria-label="Close">✕</button></div>
     <div class="modal-body">
-      <p class="hint">Click a symbol to select it. Hover for the code and name. Hessu Enarvi's symbol set, CC0.</p>
-      <h3>Primary table (<code>/</code>)</h3>
+      <input id="sym-search" type="search" placeholder="Search symbols (hospital, shelter, fire…)" autocomplete="off">
+      <h3>Primary table <code>/</code></h3>
       <div id="sym-grid-primary" class="sym-grid"></div>
-      <h3>Alternate table (<code>\</code>)</h3>
+      <h3>Alternate table <code>\</code></h3>
       <div id="sym-grid-alternate" class="sym-grid"></div>
+      <p class="hint">Symbol art from <a href="https://github.com/hessu/aprs-symbols" target="_blank" rel="noopener">hessu/aprs-symbols</a> (OH7LZB), after WA8LMF's set.</p>
     </div>
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<!-- Settings -->
+<div id="settings-modal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><h2>Settings</h2><button class="btn icon modal-close" aria-label="Close">✕</button></div>
+    <form id="settings-form" class="modal-body" autocomplete="off">
+      <section>
+        <h3>Station</h3>
+        <div class="grid-2">
+          <label>Callsign-SSID <small>source of every beacon</small>
+            <input type="text" id="s-callsign" class="mono" placeholder="N0CALL-12" required spellcheck="false">
+          </label>
+          <label>Tocall <small>identifies this software</small>
+            <input type="text" id="s-tocall" class="mono" value="APZEMC" spellcheck="false">
+          </label>
+        </div>
+        <label>Default path <small>per-object overrides in the object form</small>
+          <select id="s-path">
+            <option value="">Direct (no digipeater)</option>
+            <option value="WIDE1-1">WIDE1-1 · 1 hop (recommended for fixed objects)</option>
+            <option value="WIDE1-1,WIDE2-1">WIDE1-1,WIDE2-1 · 2 hops</option>
+            <option value="WIDE2-1">WIDE2-1</option>
+            <option value="__custom__">Custom…</option>
+          </select>
+        </label>
+        <label id="s-path-custom-wrap" hidden>Custom path <input type="text" id="s-path-custom" class="mono"></label>
+        <p class="hint">Use an SSID that is <b>not</b> Graywolf's own station SSID, so the iGate does not treat your objects as its own traffic.</p>
+      </section>
+
+      <section>
+        <h3>Radio transport</h3>
+        <div class="choice">
+          <label><input type="radio" name="s-transport" value="graywolf" checked> <b>Graywolf API</b> <small>recommended · works with a stock Graywolf, no extra Graywolf setup</small></label>
+          <label><input type="radio" name="s-transport" value="kiss"> <b>KISS over TCP</b> <small>Graywolf KISS interface (type TCP, mode modem) or any KISS TNC</small></label>
+        </div>
+
+        <div id="s-graywolf">
+          <div class="grid-2">
+            <label>Graywolf URL <input type="text" id="s-gw-url" placeholder="http://127.0.0.1:8080" spellcheck="false"></label>
+            <label>Send to
+              <select id="s-gw-sendpath">
+                <option value="rf">RF only</option>
+                <option value="both">RF + APRS-IS</option>
+                <option value="is_only">APRS-IS only (no radio)</option>
+              </select>
+            </label>
+          </div>
+          <div class="grid-2">
+            <label>Username <input type="text" id="s-gw-user" spellcheck="false" autocomplete="off"></label>
+            <label>Password <small id="s-gw-pass-hint"></small><input type="password" id="s-gw-pass" autocomplete="new-password" placeholder="••••••••"></label>
+          </div>
+          <div class="grid-2">
+            <label>Radio channel
+              <select id="s-gw-channel"><option value="0">Graywolf default</option></select>
+            </label>
+            <div class="row end">
+              <button type="button" class="btn" id="s-gw-test">Test connection</button>
+            </div>
+          </div>
+          <p id="s-gw-result" class="result" hidden></p>
+        </div>
+
+        <div id="s-kiss" hidden>
+          <div class="grid-2">
+            <label>KISS host:port <input type="text" id="s-kiss-addr" class="mono" placeholder="127.0.0.1:6700" spellcheck="false"></label>
+            <label>KISS port byte <input type="number" id="s-kiss-port" min="0" max="15" value="0"></label>
+          </div>
+          <p class="hint">In Graywolf: Interfaces → KISS TNC → add <b>TCP</b>, mode <b>modem</b> (tnc mode drops injected frames), listen <code>127.0.0.1:6700</code>, map KISS port 0 to your APRS channel.</p>
+        </div>
+      </section>
+
+      <section>
+        <h3>Application</h3>
+        <div class="grid-2">
+          <label>Web UI address <small>restart to apply</small><input type="text" id="s-web-listen" class="mono" placeholder="127.0.0.1:8765"></label>
+          <label>Objects file <small>restart to apply</small><input type="text" id="s-objects-file" class="mono" placeholder="objects.json"></label>
+        </div>
+        <label class="switch"><input type="checkbox" id="s-open-browser"><span class="track"></span><span>Open the browser when the app starts</span></label>
+      </section>
+
+      <section>
+        <h3>Updates</h3>
+        <label class="switch"><input type="checkbox" id="s-upd-check"><span class="track"></span><span>Check for new releases automatically</span></label>
+        <div class="row">
+          <label class="inline">Every <input type="number" id="s-upd-hours" min="1" max="168" step="1" style="width:5em"> hours</label>
+          <button type="button" class="btn" id="s-upd-now">Check now</button>
+          <span id="s-upd-status" class="muted"></span>
+        </div>
+      </section>
+
+      <p id="settings-error" class="error" hidden></p>
+      <div class="form-actions">
+        <button type="submit" class="btn primary">Save settings</button>
+        <button type="button" class="btn modal-close">Cancel</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn danger ghost" id="quit-btn" title="Stop the emcomm-objects process">Quit app</button>
+      </div>
+      <p class="hint" id="settings-paths"></p>
+    </form>
+  </div>
+</div>
+
+<!-- Update -->
+<div id="update-modal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><h2 id="upd-title">Update available</h2><button class="btn icon modal-close" aria-label="Close">✕</button></div>
+    <div class="modal-body">
+      <p id="upd-summary"></p>
+      <pre id="upd-notes" class="notes"></pre>
+      <p id="upd-progress" class="hint" hidden></p>
+      <div class="form-actions">
+        <button type="button" class="btn primary" id="upd-install">Install now</button>
+        <a class="btn" id="upd-download" target="_blank" rel="noopener">Download</a>
+        <button type="button" class="btn ghost" id="upd-skip">Skip this version</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn modal-close">Later</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm -->
+<div id="confirm-modal" class="modal" hidden>
+  <div class="modal-card narrow">
+    <div class="modal-head"><h2 id="confirm-title">Are you sure?</h2></div>
+    <div class="modal-body">
+      <p id="confirm-text"></p>
+      <div class="form-actions">
+        <button type="button" class="btn danger" id="confirm-ok">Confirm</button>
+        <button type="button" class="btn" id="confirm-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="vendor/leaflet.js"></script>
+<script src="symbols.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,0 +1,55 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": ["icon.png"]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {
+          "name": "EmcommObjects",
+          "version": "0.0.0.0"
+        },
+        "description": "Emcomm Objects: APRS objects via Graywolf",
+        "minimum-os": "win7",
+        "execution-level": "as invoker",
+        "ui-access": false,
+        "auto-elevate": false,
+        "dpi-awareness": "per monitor v2",
+        "disable-theming": false,
+        "disable-window-filtering": false,
+        "high-resolution-scrolling-aware": false,
+        "ultra-high-resolution-scrolling-aware": false,
+        "long-path-aware": true,
+        "printer-driver-isolation": false,
+        "gdi-scaling": false,
+        "segment-heap": false,
+        "use-common-controls-v6": true
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "0.0.0.0",
+          "product_version": "0.0.0.0"
+        },
+        "info": {
+          "0409": {
+            "Comments": "https://github.com/KK4ODA/emcomm-objects",
+            "CompanyName": "KK4ODA",
+            "FileDescription": "Emcomm Objects: APRS objects via Graywolf",
+            "FileVersion": "0.0.0.0",
+            "InternalName": "emcomm-objects",
+            "LegalCopyright": "MIT License",
+            "OriginalFilename": "emcomm-objects.exe",
+            "ProductName": "Emcomm Objects",
+            "ProductVersion": "0.0.0.0"
+          }
+        }
+      }
+    }
+  }
+}
