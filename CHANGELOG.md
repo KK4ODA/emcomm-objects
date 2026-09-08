@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-09-08)
 
 - **EmComm Planner link** (Settings > EmComm Planner). Forwards the APRS stations Graywolf hears
   to the planner every 30 s, sends the planner's queued APRS notifications through Graywolf and
