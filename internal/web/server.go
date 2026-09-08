@@ -20,6 +20,7 @@ import (
 	"github.com/kk4oda/emcomm-objects/internal/graywolf"
 	"github.com/kk4oda/emcomm-objects/internal/link"
 	"github.com/kk4oda/emcomm-objects/internal/logbuf"
+	"github.com/kk4oda/emcomm-objects/internal/planner"
 	"github.com/kk4oda/emcomm-objects/internal/scheduler"
 	"github.com/kk4oda/emcomm-objects/internal/store"
 	"github.com/kk4oda/emcomm-objects/internal/update"
@@ -37,6 +38,7 @@ type Deps struct {
 	Broker    *Broker
 	Logs      *logbuf.Handler
 	Updater   *update.Updater
+	Planner   *planner.Bridge
 	Log       *slog.Logger
 
 	// Config returns the live configuration; ApplyConfig validates, saves
@@ -116,6 +118,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", s.handlePutConfig)
 	mux.HandleFunc("POST /api/graywolf/test", s.handleGraywolfTest)
+	mux.HandleFunc("POST /api/planner/test", s.handlePlannerTest)
+	mux.HandleFunc("POST /api/planner/sync", s.handlePlannerSync)
+	mux.HandleFunc("POST /api/planner/import-objects", s.handlePlannerImport)
 	mux.HandleFunc("GET /api/update", s.handleUpdate)
 	mux.HandleFunc("POST /api/update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /api/update/apply", s.handleUpdateApply)
@@ -311,19 +316,20 @@ func (s *Server) handleReviveNow(w http.ResponseWriter, r *http.Request) {
 // --- status / config ---
 
 type statusResponse struct {
-	Version     string        `json:"version"`
-	SetupNeeded bool          `json:"setup_needed"`
-	Transport   link.State    `json:"transport"`
-	Station     stationInfo   `json:"station"`
-	DataDir     string        `json:"data_dir"`
-	ConfigPath  string        `json:"config_path"`
-	ObjectsFile string        `json:"objects_file"`
-	Mode        string        `json:"install_mode"`
-	KillCount   int           `json:"kill_beacon_count"`
-	KillSpacing float64       `json:"kill_beacon_interval_seconds"`
-	Update      *update.State `json:"update,omitempty"`
-	Recent      []Event       `json:"recent"`
-	Uptime      float64       `json:"uptime_seconds"`
+	Version     string         `json:"version"`
+	SetupNeeded bool           `json:"setup_needed"`
+	Transport   link.State     `json:"transport"`
+	Station     stationInfo    `json:"station"`
+	DataDir     string         `json:"data_dir"`
+	ConfigPath  string         `json:"config_path"`
+	ObjectsFile string         `json:"objects_file"`
+	Mode        string         `json:"install_mode"`
+	KillCount   int            `json:"kill_beacon_count"`
+	KillSpacing float64        `json:"kill_beacon_interval_seconds"`
+	Update      *update.State  `json:"update,omitempty"`
+	Planner     *planner.State `json:"planner,omitempty"`
+	Recent      []Event        `json:"recent"`
+	Uptime      float64        `json:"uptime_seconds"`
 }
 
 type stationInfo struct {
@@ -352,6 +358,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		u := s.d.Updater.Snapshot()
 		resp.Update = &u
 	}
+	if s.d.Planner != nil {
+		p := s.d.Planner.State()
+		resp.Planner = &p
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -376,10 +386,25 @@ type configView struct {
 	Storage config.Storage `json:"storage"`
 	Web     config.Web     `json:"web"`
 	Updates config.Updates `json:"updates"`
+	Planner struct {
+		Enabled         bool   `json:"enabled"`
+		URL             string `json:"url"`
+		Token           string `json:"token"` // empty on GET; on PUT empty = keep
+		TokenSet        bool   `json:"token_set"`
+		ForwardStations bool   `json:"forward_stations"`
+		SendMessages    bool   `json:"send_messages"`
+		IntervalSeconds int    `json:"interval_seconds"`
+	} `json:"planner"`
 }
 
 func viewOf(c config.Config) configView {
 	v := configView{Station: c.Station, Transport: c.Transport, KISS: c.KISS, Storage: c.Storage, Web: c.Web, Updates: c.Updates}
+	v.Planner.Enabled = c.Planner.Enabled
+	v.Planner.URL = c.Planner.URL
+	v.Planner.TokenSet = c.Planner.Token != ""
+	v.Planner.ForwardStations = c.Planner.ForwardStations
+	v.Planner.SendMessages = c.Planner.SendMessages
+	v.Planner.IntervalSeconds = c.Planner.IntervalSeconds
 	v.Graywolf.URL = c.Graywolf.URL
 	v.Graywolf.Username = c.Graywolf.Username
 	v.Graywolf.PasswordSet = c.Graywolf.Password != ""
@@ -412,6 +437,11 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	next.Storage = v.Storage
 	next.Web = v.Web
 	next.Updates = v.Updates
+	next.Planner = config.Planner{Enabled: v.Planner.Enabled, URL: v.Planner.URL, Token: cur.Planner.Token, ForwardStations: v.Planner.ForwardStations,
+		SendMessages: v.Planner.SendMessages, IntervalSeconds: v.Planner.IntervalSeconds, LookbackSeconds: cur.Planner.LookbackSeconds}
+	if v.Planner.Token != "" {
+		next.Planner.Token = v.Planner.Token
+	}
 	next.Normalize()
 	if err := next.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, "%v", err)
@@ -458,6 +488,88 @@ func (s *Server) handleGraywolfTest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
 	writeJSON(w, http.StatusOK, graywolf.NewClient(url, user, pass).Test(ctx))
+}
+
+// --- EmComm Planner ---
+
+// handlePlannerTest checks the token from the body (falling back to the
+// saved one) against the planner without saving anything.
+func (s *Server) handlePlannerTest(w http.ResponseWriter, r *http.Request) {
+	if s.d.Planner == nil {
+		writeError(w, http.StatusNotFound, "planner link disabled")
+		return
+	}
+	cur := s.d.Config().Planner
+	var body struct {
+		URL   string `json:"url"`
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body)
+	p := cur
+	if u := strings.TrimSpace(body.URL); u != "" {
+		p.URL = u
+	}
+	if t := strings.TrimSpace(body.Token); t != "" {
+		p.Token = t
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	out, err := s.d.Planner.Test(ctx, p)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "bridge": out["bridge"]})
+}
+
+// handlePlannerSync runs one sync cycle now.
+func (s *Server) handlePlannerSync(w http.ResponseWriter, r *http.Request) {
+	if s.d.Planner == nil {
+		writeError(w, http.StatusNotFound, "planner link disabled")
+		return
+	}
+	s.d.Planner.Wake()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handlePlannerImport pulls the active deployment's sites from the planner
+// and adds them as disabled objects (existing names are replaced).
+func (s *Server) handlePlannerImport(w http.ResponseWriter, r *http.Request) {
+	if s.d.Planner == nil {
+		writeError(w, http.StatusNotFound, "planner link disabled")
+		return
+	}
+	var body struct {
+		Deployment string `json:"deployment"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	rows, depName, err := s.d.Planner.FetchObjects(ctx, s.d.Config().Planner, body.Deployment)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "%v", err)
+		return
+	}
+	data, _ := json.Marshal(rows)
+	var objs []store.Object
+	if err := json.Unmarshal(data, &objs); err != nil {
+		writeError(w, http.StatusBadGateway, "planner objects: %v", err)
+		return
+	}
+	added := 0
+	for _, o := range objs {
+		o.Enabled = false
+		if o.IntervalMinutes <= 0 {
+			o.IntervalMinutes = 30
+		}
+		if err := s.d.Store.Upsert(o); err != nil {
+			writeError(w, http.StatusBadRequest, "%s: %v", o.ObjectName, err)
+			return
+		}
+		added++
+	}
+	s.d.Broker.Notify(EventObjects)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "imported": added, "deployment": depName})
 }
 
 // --- updates ---

@@ -37,6 +37,7 @@ import (
 	"github.com/kk4oda/emcomm-objects/internal/link"
 	"github.com/kk4oda/emcomm-objects/internal/logbuf"
 	"github.com/kk4oda/emcomm-objects/internal/paths"
+	"github.com/kk4oda/emcomm-objects/internal/planner"
 	"github.com/kk4oda/emcomm-objects/internal/scheduler"
 	"github.com/kk4oda/emcomm-objects/internal/store"
 	"github.com/kk4oda/emcomm-objects/internal/transmit"
@@ -168,6 +169,8 @@ func run() int {
 	})
 	st.SetOnSave(func() { broker.Notify(web.EventObjects) })
 
+	var bridge *planner.Bridge
+
 	// Live config + hot apply for Settings changes.
 	var cfgMu sync.RWMutex
 	current := cfg
@@ -191,6 +194,9 @@ func run() int {
 			return err
 		}
 		sch.Wake()
+		if bridge != nil {
+			bridge.Wake()
+		}
 		log.Info("settings saved", "path", cfgPath, "transport", next.Transport, "callsign", next.Station.Callsign)
 		return nil
 	}
@@ -208,6 +214,11 @@ func run() int {
 		log.With("comp", "update"))
 	go updater.Run(ctx)
 
+	// EmComm Planner link: forwards Graywolf's heard stations and sends the
+	// planner's queued APRS messages. Idles while disabled in Settings.
+	bridge = planner.New(gwClient, getConfig, log.With("comp", "planner"), func(planner.State) { broker.Notify(web.EventConfig) })
+	go bridge.Run(ctx)
+
 	log.Info("emcomm-objects starting",
 		"version", version.String(), "mode", string(mode), "data", dataDir,
 		"transport", cfg.Transport, "callsign", cfg.Station.Callsign, "objects", objectsPath,
@@ -215,7 +226,7 @@ func run() int {
 
 	if cfg.Web.Enabled {
 		srv := web.New(web.Deps{
-			Store: st, Scheduler: sch, Link: router, Broker: broker, Logs: logs, Updater: updater,
+			Store: st, Scheduler: sch, Link: router, Broker: broker, Logs: logs, Updater: updater, Planner: bridge,
 			Log:         log.With("comp", "web"),
 			Config:      getConfig,
 			ApplyConfig: applyConfig,

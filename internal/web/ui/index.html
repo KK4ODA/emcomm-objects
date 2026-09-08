@@ -22,7 +22,8 @@
   <div id="station-chip" class="chip-station" title="Source callsign, tocall and default digipeater path of every beacon (Settings > Station)">—</div>
   <div class="spacer"></div>
   <button id="update-pill" class="pill pill-update" hidden title="A newer release is available. Click for details and to install">Update</button>
-  <div id="link-pill" class="pill off" title="Radio transport state: green = connected, orange = connecting, red = down. The text says which transport and why"><i class="dot"></i><span id="link-text">starting…</span></div>
+  <div id="link-pill" class="pill off" title="Radio transport state: green = connected, orange = connecting, red = down. The text says which transport and why"><i class="dot"></i><span id="link-text">starting…</span>
+  <span id="planner-pill" class="pill off" hidden title="EmComm Planner link"><span id="planner-text">Planner</span></span></div>
   <button id="beacon-all-btn" class="btn ghost" title="Send every enabled live object right now, one after another (asks first)">Beacon all</button>
   <button id="theme-btn" class="btn icon" title="Switch between light and dark theme (remembered in this browser)" aria-label="Toggle theme">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c0-.5 0-1-.1-1.4A7 7 0 0 1 12.4 3.1c-.1 0-.3 0-.4-.1z"/></svg>
@@ -302,6 +303,26 @@
           <label title="Objects JSON file (Pinpoint APRS compatible). Relative paths are inside the data folder. Takes effect after a restart">Objects file <small>restart to apply</small><input type="text" id="s-objects-file" class="mono" placeholder="objects.json" title="Objects JSON file (Pinpoint APRS compatible). Relative paths are inside the data folder. Takes effect after a restart"></label>
         </div>
         <label class="switch" title="Open this page in your browser each time the app starts"><input type="checkbox" id="s-open-browser" title="Open this page in your browser each time the app starts"><span class="track"></span><span>Open the browser when the app starts</span></label>
+      </section>
+
+      <section id="s-planner-section">
+        <h3>EmComm Planner</h3>
+        <p class="hint">Link this station to <a href="https://emcommplanner.org" target="_blank" rel="noopener">EmComm Planner</a>: the stations Graywolf hears show up on the planner's net control board and site map, operators can check in over APRS, and the planner's notifications go out as APRS messages through Graywolf. Create a bridge on the planner's APRS page and paste its token.</p>
+        <label class="switch" title="Run the EmComm Planner link"><input type="checkbox" id="s-pl-enabled" title="Run the EmComm Planner link"><span class="track"></span><span>Enable the EmComm Planner link</span></label>
+        <div class="grid-2">
+          <label title="The planner's functions address, shown on its APRS page">Planner URL <input type="text" id="s-pl-url" class="mono" placeholder="https://....supabase.co/functions/v1" spellcheck="false" title="The planner's functions address, shown on its APRS page"></label>
+          <label title="Bridge token from the planner's APRS page. Stored in config.yaml on this computer, never shown here again">Bridge token <small id="s-pl-token-hint"></small><input type="password" id="s-pl-token" class="mono" autocomplete="new-password" placeholder="ebt_..." title="Bridge token from the planner's APRS page. Stored in config.yaml on this computer, never shown here again"></label>
+        </div>
+        <div class="row">
+          <label class="switch" title="Send the APRS stations Graywolf hears to the planner"><input type="checkbox" id="s-pl-stations" title="Send the APRS stations Graywolf hears to the planner"><span class="track"></span><span>Forward heard stations</span></label>
+          <label class="switch" title="Send the planner's queued APRS notifications through Graywolf"><input type="checkbox" id="s-pl-messages" title="Send the planner's queued APRS notifications through Graywolf"><span class="track"></span><span>Send the planner's APRS messages</span></label>
+          <label class="inline" title="Seconds between syncs (10 or more)">Every <input type="number" id="s-pl-interval" min="10" max="600" step="5" style="width:5em" title="Seconds between syncs (10 or more)"> s</label>
+        </div>
+        <div class="row">
+          <button type="button" class="btn" id="s-pl-test" title="Check the URL and token against the planner. Nothing is saved">Test link</button>
+          <button type="button" class="btn" id="s-pl-import" title="Add the planner's active deployment sites as disabled objects">Import deployment sites as objects</button>
+          <span id="s-pl-result" class="muted"></span>
+        </div>
       </section>
 
       <section>

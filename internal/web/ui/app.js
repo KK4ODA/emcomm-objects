@@ -28,6 +28,8 @@ const API = {
   config: () => req('GET', '/api/config'),
   saveConfig: (c) => req('PUT', '/api/config', c),
   gwTest: (c) => req('POST', '/api/graywolf/test', c),
+  plTest: (c) => req('POST', '/api/planner/test', c),
+  plImport: (c) => req('POST', '/api/planner/import-objects', c),
   logs: () => req('GET', '/api/logs'),
   update: () => req('GET', '/api/update'),
   updateCheck: () => req('POST', '/api/update/check'),
@@ -632,6 +634,16 @@ function fillSettings(c) {
   $('#s-web-listen').value = c.web.listen || '';
   $('#s-objects-file').value = c.storage.objects_file || '';
   $('#s-open-browser').checked = !!c.web.open_browser;
+  const pl = c.planner || {};
+  $('#s-pl-enabled').checked = !!pl.enabled;
+  $('#s-pl-url').value = pl.url || '';
+  $('#s-pl-token').value = '';
+  $('#s-pl-token').placeholder = pl.token_set ? '\u2022\u2022\u2022\u2022 (saved)' : 'ebt_...';
+  $('#s-pl-token-hint').textContent = pl.token_set ? 'leave blank to keep' : '';
+  $('#s-pl-stations').checked = pl.forward_stations !== false;
+  $('#s-pl-messages').checked = pl.send_messages !== false;
+  $('#s-pl-interval').value = pl.interval_seconds || 30;
+  $('#s-pl-result').textContent = '';
   $('#s-upd-check').checked = !!c.updates.check;
   $('#s-upd-hours').value = c.updates.interval_hours || 12;
   $('#s-gw-result').hidden = true;
@@ -689,6 +701,24 @@ async function testGraywolf(quiet = false) {
 }
 $('#s-gw-test').addEventListener('click', () => testGraywolf(false));
 
+$('#s-pl-test').addEventListener('click', async () => {
+  const out = $('#s-pl-result');
+  out.textContent = 'Testing...';
+  try {
+    const r = await API.plTest({ url: $('#s-pl-url').value.trim(), token: $('#s-pl-token').value.trim() });
+    out.textContent = r.ok ? `Linked to bridge "${r.bridge}"` : `Failed: ${r.error}`;
+  } catch (e) { out.textContent = `Failed: ${e.message}`; }
+});
+$('#s-pl-import').addEventListener('click', async () => {
+  const out = $('#s-pl-result');
+  out.textContent = 'Importing...';
+  try {
+    const r = await API.plImport({ deployment: 'active' });
+    out.textContent = `${r.imported} object(s) imported from "${r.deployment}", disabled until you enable them`;
+    toast(`${r.imported} objects imported from EmComm Planner`, 'ok');
+  } catch (e) { out.textContent = `Failed: ${e.message}`; }
+});
+
 $('#settings-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const c = JSON.parse(JSON.stringify(cfgView));
@@ -701,6 +731,8 @@ $('#settings-form').addEventListener('submit', async (ev) => {
   c.web = { enabled: true, listen: $('#s-web-listen').value.trim(), open_browser: $('#s-open-browser').checked };
   c.storage = { objects_file: $('#s-objects-file').value.trim() };
   c.updates = { check: $('#s-upd-check').checked, interval_hours: parseFloat($('#s-upd-hours').value) || 12, skip_version: cfgView.updates.skip_version || '' };
+  c.planner = { enabled: $('#s-pl-enabled').checked, url: $('#s-pl-url').value.trim(), token: $('#s-pl-token').value.trim(),
+    forward_stations: $('#s-pl-stations').checked, send_messages: $('#s-pl-messages').checked, interval_seconds: parseInt($('#s-pl-interval').value, 10) || 30 };
   try {
     const r = await API.saveConfig(c);
     closeModal('#settings-modal');
@@ -782,6 +814,17 @@ function waitForRestart() {
 
 // ---------- Status / link ----------
 
+function applyPlannerState(p) {
+  const pill = $('#planner-pill');
+  if (!pill) return;
+  if (!p || !p.enabled) { pill.hidden = true; return; }
+  pill.hidden = false;
+  pill.className = `pill ${p.connected ? 'ok' : (p.last_error ? 'err' : 'warn')}`;
+  const when = p.last_ok ? new Date(p.last_ok).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'never';
+  $('#planner-text').textContent = p.connected ? `Planner linked · ${p.stations_sent} stations · ${p.messages_sent} msgs` : `Planner: ${p.last_error || 'connecting'}`;
+  pill.title = `EmComm Planner link · last success ${when}${p.bridge_name ? ' · bridge ' + p.bridge_name : ''}${p.last_error ? ' · ' + p.last_error : ''}`;
+}
+
 function applyLinkState(s) {
   const pill = $('#link-pill');
   const cls = { connected: 'ok', connecting: 'warn', disconnected: 'err' }[s.status] || 'off';
@@ -798,6 +841,7 @@ async function refreshStatus() {
     $('#setup-banner').hidden = !status.setup_needed;
     const st = status.station;
     $('#station-chip').textContent = st.callsign ? `${st.callsign} › ${st.tocall}${st.path ? ' via ' + st.path : ' direct'}` : 'no callsign set';
+    applyPlannerState(status.planner);
     $('#station-chip').title = st.callsign ? `Beacons are sent from ${st.callsign} to ${st.tocall}${st.path ? ' via ' + st.path : ' with no digipeater'} (Settings > Station)` : 'No callsign set yet: open Settings';
     $('#sb-version').textContent = `emcomm-objects ${status.version}`;
     $('#sb-mode').textContent = status.install_mode;
