@@ -32,6 +32,20 @@ type Config struct {
 	Storage   Storage  `yaml:"storage" json:"storage"`
 	Web       Web      `yaml:"web" json:"web"`
 	Updates   Updates  `yaml:"updates" json:"updates"`
+	Planner   Planner  `yaml:"planner" json:"planner"`
+}
+
+// Planner links this station to EmComm Planner (emcommplanner.org): heard
+// stations go up, queued APRS messages come down and are sent through
+// Graywolf. Token is issued once by the planner (APRS page > Create bridge).
+type Planner struct {
+	Enabled         bool   `yaml:"enabled" json:"enabled"`
+	URL             string `yaml:"url" json:"url"`     // functions base, e.g. https://<ref>.supabase.co/functions/v1
+	Token           string `yaml:"token" json:"token"` // bridge token (secret)
+	ForwardStations bool   `yaml:"forward_stations" json:"forward_stations"`
+	SendMessages    bool   `yaml:"send_messages" json:"send_messages"`
+	IntervalSeconds int    `yaml:"interval_seconds" json:"interval_seconds"`
+	LookbackSeconds int    `yaml:"lookback_seconds" json:"lookback_seconds"` // first sync asks Graywolf for this much history
 }
 
 // Station describes how outgoing frames are addressed.
@@ -95,6 +109,7 @@ func Default() Config {
 		Storage:   Storage{ObjectsFile: "objects.json"},
 		Web:       Web{Enabled: true, Listen: "127.0.0.1:8765", OpenBrowser: true},
 		Updates:   Updates{Check: true, IntervalHours: 12},
+		Planner:   Planner{URL: "https://rboklyjrdctsbarsbtdj.supabase.co/functions/v1", ForwardStations: true, SendMessages: true, IntervalSeconds: 30, LookbackSeconds: 3600},
 	}
 }
 
@@ -131,6 +146,14 @@ func (c *Config) Normalize() {
 	}
 	if !strings.Contains(c.Graywolf.URL, "://") {
 		c.Graywolf.URL = "http://" + c.Graywolf.URL
+	}
+	c.Planner.URL = strings.TrimRight(strings.TrimSpace(c.Planner.URL), "/")
+	c.Planner.Token = strings.TrimSpace(c.Planner.Token)
+	if c.Planner.IntervalSeconds <= 0 {
+		c.Planner.IntervalSeconds = 30
+	}
+	if c.Planner.LookbackSeconds <= 0 {
+		c.Planner.LookbackSeconds = 3600
 	}
 	c.Graywolf.Username = strings.TrimSpace(c.Graywolf.Username)
 	c.Graywolf.SendPath = strings.ToLower(strings.TrimSpace(c.Graywolf.SendPath))
@@ -204,6 +227,18 @@ func (c Config) Validate() error {
 	}
 	if c.Storage.ObjectsFile == "" {
 		return fmt.Errorf("storage.objects_file is required")
+	}
+	if c.Planner.Enabled {
+		u, err := url.Parse(c.Planner.URL)
+		if err != nil || u.Host == "" || u.Scheme != "https" {
+			return fmt.Errorf("planner.url %q must be an https URL like https://<ref>.supabase.co/functions/v1", c.Planner.URL)
+		}
+		if len(c.Planner.Token) < 16 {
+			return fmt.Errorf("planner.token is missing; create a bridge on the planner's APRS page and paste its token")
+		}
+		if c.Planner.IntervalSeconds < 10 {
+			return fmt.Errorf("planner.interval_seconds must be at least 10")
+		}
 	}
 	if c.Web.Enabled {
 		if err := validateHostPort(c.Web.Listen); err != nil {
@@ -325,6 +360,18 @@ web:
   enabled: true
   listen: "127.0.0.1:8765"
   open_browser: true
+
+planner:
+  # EmComm Planner link (emcommplanner.org). Create a bridge on the planner's
+  # APRS page, paste its token here, and this station forwards the APRS
+  # stations Graywolf hears and sends the planner's queued APRS messages.
+  enabled: false
+  url: "https://rboklyjrdctsbarsbtdj.supabase.co/functions/v1"
+  token: ""
+  forward_stations: true
+  send_messages: true
+  interval_seconds: 30
+  lookback_seconds: 3600
 
 updates:
   # Check GitHub for a newer release at start and every interval_hours.

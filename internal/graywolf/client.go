@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -317,4 +318,44 @@ func (c *Client) Test(ctx context.Context) TestResult {
 	}
 	r.OK = true
 	return r
+}
+
+// ListStations is GET /api/stations: stations heard in the last timerange
+// seconds, optionally only those updated since an RFC3339 timestamp. The
+// rows are returned as maps so the bridge forwards Graywolf's DTO verbatim.
+func (c *Client) ListStations(ctx context.Context, timerangeSeconds int, since string) ([]map[string]any, error) {
+	if timerangeSeconds <= 0 {
+		timerangeSeconds = 3600
+	}
+	path := fmt.Sprintf("/stations?bbox=-90,-180,90,180&timerange=%d", timerangeSeconds)
+	if since != "" {
+		path += "&since=" + url.QueryEscape(since)
+	}
+	var out []map[string]any
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SendMessage is POST /api/messages: a direct APRS message to one station.
+// Graywolf handles retries and acks; RF first with APRS-IS fallback per its
+// own preferences.
+func (c *Client) SendMessage(ctx context.Context, to, text string) error {
+	to = strings.ToUpper(strings.TrimSpace(to))
+	if to == "" || strings.TrimSpace(text) == "" {
+		return errors.New("graywolf: message needs a recipient and text")
+	}
+	return c.do(ctx, http.MethodPost, "/messages", map[string]any{"to": to, "text": text}, nil)
+}
+
+// StationCallsign is GET /api/station/config: Graywolf's own callsign-SSID.
+func (c *Client) StationCallsign(ctx context.Context) (string, error) {
+	var out struct {
+		Callsign string `json:"callsign"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/station/config", nil, &out); err != nil {
+		return "", err
+	}
+	return out.Callsign, nil
 }

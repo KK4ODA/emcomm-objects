@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **EmComm Planner link** (Settings > EmComm Planner). Forwards the APRS stations Graywolf hears
+  to the planner every 30 s, sends the planner's queued APRS notifications through Graywolf and
+  acknowledges each one, and imports the active deployment's sites as disabled objects. A
+  per-group bridge token from the planner's APRS page authenticates everything; only the planner
+  keeps a hash of it. New `planner:` section in `config.yaml`, status pill in the top bar,
+  `POST /api/planner/test|sync|import-objects`.
+
 ## 0.2.1 (2026-09-06)
 
 - Tooltips on every control, field, chip and status element in the UI (hover anything for an explanation).

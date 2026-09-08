@@ -79,6 +79,27 @@ into a *custom* beacon that carries the spec-exact `;NAME     _DDHHMMz…` info 
 deleted once the kill sequence has drained or when you delete the object. You will see the beacons on
 Graywolf's Beacons page; leave them alone.
 
+## EmComm Planner link
+
+Emcomm Objects can link this station to [EmComm Planner](https://emcommplanner.org), the
+deployment planner the same group uses for staffing, packets and net control:
+
+- **Stations up.** Every APRS station Graywolf hears is forwarded to the planner, where net
+  control sees each operator's last position next to their check-in status and the Sites map
+  shows everyone heard, coloured by age.
+- **Messages down.** Operators who choose *APRS* under the planner's Profile > Notifications get
+  their offers and packet changes as APRS messages, sent through Graywolf by this app.
+- **Objects.** *Import deployment sites as objects* pulls the active deployment's sites (aid
+  stations, net control, staging) as disabled objects ready to beacon.
+- **Check-ins over APRS** need no bridge at all: configure Graywolf Actions with the webhook URL
+  the planner shows, and `@@#checkin`, `@@#onpos`, `@@#checkout`, `@@#status` from any APRS
+  radio go straight to the planner.
+
+Setup: on the planner's **APRS** page create a bridge and copy its token; in Emcomm Objects open
+Settings > EmComm Planner, paste the planner URL and the token, tick what to sync, *Test link*,
+Save. The token is stored in `config.yaml` on this computer and never shown again. The status
+pill in the top bar turns green when the link is up.
+
 ## Config file
 
 `config.yaml` (see [`config.example.yaml`](config.example.yaml)) mirrors Settings: `station`, `transport`
@@ -114,6 +135,7 @@ The web UI is a thin client over a local JSON API that other tools may use (VarM
 | `GET /api/status` | version, transport state, station, paths, update state |
 | `GET /api/config`, `PUT /api/config` | settings (the Graywolf password is never returned) |
 | `POST /api/graywolf/test` | try Graywolf credentials |
+| `POST /api/planner/test`, `/api/planner/sync`, `/api/planner/import-objects` | EmComm Planner link: check the token, sync now, import the active deployment's sites |
 | `GET /api/update`, `POST /api/update/check`, `/apply`, `/skip` | updater |
 | `GET /api/events` | Server-Sent Events: `packet`, `state`, `log`, `objects`, `config`, `update` |
 
