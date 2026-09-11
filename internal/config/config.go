@@ -35,6 +35,33 @@ type Config struct {
 	Planner   Planner  `yaml:"planner" json:"planner"`
 }
 
+// NormalizePlannerURL turns whatever was pasted into the functions base URL
+// the bridge needs: the planner's own webhook URL (…/aprs-ingest/action?token=…)
+// becomes …/functions/v1, the web address emcommplanner.org becomes the hosted
+// functions URL, query strings and trailing slashes go.
+func NormalizePlannerURL(raw string) string {
+	u := strings.TrimSpace(raw)
+	if u == "" {
+		return ""
+	}
+	if !strings.Contains(u, "://") {
+		u = "https://" + u
+	}
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		u = u[:i]
+	}
+	if i := strings.Index(u, "/aprs-ingest"); i >= 0 {
+		u = u[:i]
+	}
+	u = strings.TrimRight(u, "/")
+	if strings.HasSuffix(strings.ToLower(u), "emcommplanner.org") || strings.Contains(strings.ToLower(u), "emcommplanner.org/") {
+		return defaultPlannerURL
+	}
+	return u
+}
+
+const defaultPlannerURL = "https://rboklyjrdctsbarsbtdj.supabase.co/functions/v1"
+
 // Planner links this station to EmComm Planner (emcommplanner.org): heard
 // stations go up, queued APRS messages come down and are sent through
 // Graywolf. Token is issued once by the planner (APRS page > Create bridge).
@@ -109,7 +136,7 @@ func Default() Config {
 		Storage:   Storage{ObjectsFile: "objects.json"},
 		Web:       Web{Enabled: true, Listen: "127.0.0.1:8765", OpenBrowser: true},
 		Updates:   Updates{Check: true, IntervalHours: 12},
-		Planner:   Planner{URL: "https://rboklyjrdctsbarsbtdj.supabase.co/functions/v1", ForwardStations: true, SendMessages: true, IntervalSeconds: 30, LookbackSeconds: 3600},
+		Planner:   Planner{URL: defaultPlannerURL, ForwardStations: true, SendMessages: true, IntervalSeconds: 30, LookbackSeconds: 3600},
 	}
 }
 
@@ -147,7 +174,7 @@ func (c *Config) Normalize() {
 	if !strings.Contains(c.Graywolf.URL, "://") {
 		c.Graywolf.URL = "http://" + c.Graywolf.URL
 	}
-	c.Planner.URL = strings.TrimRight(strings.TrimSpace(c.Planner.URL), "/")
+	c.Planner.URL = NormalizePlannerURL(c.Planner.URL)
 	c.Planner.Token = strings.TrimSpace(c.Planner.Token)
 	if c.Planner.IntervalSeconds <= 0 {
 		c.Planner.IntervalSeconds = 30

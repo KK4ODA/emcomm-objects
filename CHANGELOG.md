@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 (2026-09-11)
+
+- The Planner URL setting accepts whatever was pasted from the planner: the Graywolf webhook URL, the web address or a trailing slash are trimmed to the functions address. Pasting the webhook URL used to make *Test link* fail with `decode /aprs-ingest/ping: invalid character 'o'`.
+
 ## 0.3.0 (2026-09-08)
 
 - **EmComm Planner link** (Settings > EmComm Planner). Forwards the APRS stations Graywolf hears

@@ -114,3 +114,21 @@ func TestSaveRoundTrip(t *testing.T) {
 		t.Fatal("header missing")
 	}
 }
+
+func TestNormalizePlannerURL(t *testing.T) {
+	cases := map[string]string{
+		"https://abc.supabase.co/functions/v1":                                    "https://abc.supabase.co/functions/v1",
+		"https://abc.supabase.co/functions/v1/":                                   "https://abc.supabase.co/functions/v1",
+		"https://abc.supabase.co/functions/v1/aprs-ingest/action?token=ebt_x":     "https://abc.supabase.co/functions/v1",
+		"https://abc.supabase.co/functions/v1/aprs-ingest":                        "https://abc.supabase.co/functions/v1",
+		"abc.supabase.co/functions/v1":                                            "https://abc.supabase.co/functions/v1",
+		"https://emcommplanner.org":                                               defaultPlannerURL,
+		"https://emcommplanner.org/aprs":                                          defaultPlannerURL,
+		"":                                                                        "",
+	}
+	for in, want := range cases {
+		if got := NormalizePlannerURL(in); got != want {
+			t.Errorf("NormalizePlannerURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
